@@ -1,0 +1,9 @@
+/x64/
+/bin/
+*.exe
+*.obj
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+.vs/
