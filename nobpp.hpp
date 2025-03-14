@@ -395,7 +395,7 @@ UNSUPPORTED();
         // compile all of the cpp files
         nob::ParallelForEach(out, std::function([obj,cmd](std::filesystem::path p)
                 {
-                    (cmd + SourceFile{p} + ObjectFile{obj / (p.filename().string() + ".obj")}).Run();
+                    (cmd + SourceFile{p} + ObjectFile{obj / p.filename().replace_extension(".obj") }).Run();
                 }), runAsync
         );
     }
@@ -451,7 +451,8 @@ UNSUPPORTED();
                     std::filesystem::rename(binPath, oldBinPath);
 
                     // compile and run the new binary           // todo: add vvv as a CompilerFlag
-                    (CompileCommand() + SourceFile{ srcPath } + CustomCompilerFlag{ "-std:c++17" } + AddLinkCommand{ LinkCommand() + ExecutableFile{ binPath } }).Run();
+                    (CompileCommand() + SourceFile{ srcPath } + CustomCompilerFlag{ "-std:c++17" }
+                    + ObjectFile{ std::filesystem::temp_directory_path() / srcPath.filename().replace_extension(".obj") } + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
 
                     Command newBinCmd;
                     newBinCmd = newBinCmd + binPath + std::string("-norebuild");
