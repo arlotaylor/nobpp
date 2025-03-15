@@ -35,15 +35,24 @@ namespace nob
         LinkCommand(Command cmd);
     };
 
+    struct LibraryCommand : public Command
+    {
+        LibraryCommand(std::filesystem::path path = std::filesystem::current_path());
+        LibraryCommand(Command cmd);
+    };
+
     struct SourceFile { std::filesystem::path path; };
     struct ObjectFile { std::filesystem::path path; };
     struct IncludeDirectory { std::filesystem::path path; };
-    struct LibraryDirectory { std::filesystem::path path; };
+
+    struct StaticLibraryFile { std::filesystem::path path; };  // is either .lib or .a
+    struct DynamicLibraryFile { std::filesystem::path path; };  // is either .dll, .so or .dylib
+
     struct ExecutableFile { std::filesystem::path path; };
     struct AddLinkCommand { LinkCommand lc; };  // it is really annoying that this has to exist, but CompilerCommand + LinkCommand is ambiguous because LinkCommand casts to a path
 
-    enum class CompilerFlag { OptimizeSpeed, OptimizeSpace, KeepLinker, Debug };
-    enum class LinkerFlag { OutputDLL, Debug };
+    enum class CompilerFlag { OptimizeSpeed, OptimizeSpace, KeepLinker, Debug, PositionIndependentCode };
+    enum class LinkerFlag { OutputDynamicLibrary, Debug };
     struct CustomCompilerFlag { std::string flag; };
     struct CustomLinkerFlag { std::string flag; };
 
@@ -56,10 +65,14 @@ namespace nob
     CompileCommand operator+(CompileCommand a, AddLinkCommand b);
 
     LinkCommand operator+(LinkCommand a, ObjectFile b);
-    LinkCommand operator+(LinkCommand a, LibraryDirectory b);
+    LinkCommand operator+(LinkCommand a, StaticLibraryFile b);
+    LinkCommand operator+(LinkCommand a, DynamicLibraryFile b);
     LinkCommand operator+(LinkCommand a, ExecutableFile b);
     LinkCommand operator+(LinkCommand a, LinkerFlag b);
     LinkCommand operator+(LinkCommand a, CustomLinkerFlag b);
+
+    LibraryCommand operator+(LibraryCommand a, ObjectFile b);
+    LibraryCommand operator+(LibraryCommand a, StaticLibraryFile b);
 
     extern CompileCommand DefaultCompileCommand;
     extern LinkCommand DefaultLinkCommand;
@@ -194,9 +207,9 @@ namespace nob
 #elif defined(__nob_msvc__)
             "cl -link",
 #elif defined(__nob_gcc__)
-            "g++",  // todo: verify
+            "g++",
 #elif defined(__nob_clang__)
-            "clang++",  // todo: verify
+            "clang++",
 #else
             ([]() {std::cout << "Error: CompileCommand used with unknown compiler. "
                                "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
@@ -211,8 +224,31 @@ namespace nob
     {
     }
 
+    nob::LibraryCommand::LibraryCommand(std::filesystem::path path)
+        : Command({
+#if defined(NOBPP_LINKER_COMMAND)
+            NOBPP_LINKER_COMMAND,
+#elif defined(__nob_msvc__)
+            "lib",
+#elif defined(__nob_gcc__)
+            "ar -rcs",
+#elif defined(__nob_clang__)
+            "ar -rcs",
+#else
+            ([]() {std::cout << "Error: LibraryCommand used with unknown compiler. "
+                               "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
+#endif
+            path })
+    {
+    }
 
-#define UNSUPPORTED() std::cout << "Error: This feature is not yet supported for the compiler you are using.\n"; return a
+    nob::LibraryCommand::LibraryCommand(Command cmd)
+        : Command(cmd)
+    {
+    }
+
+
+// #define UNSUPPORTED() std::cout << "Error: This feature is not yet supported for the compiler you are using.\n"; return a
 
 
     CompileCommand operator+(CompileCommand a, SourceFile b)
@@ -246,11 +282,11 @@ namespace nob
 #if defined(__nob_msvc__)
         return a + std::string("-I") - b.path;
 #elif defined(__nob_gcc__)
-UNSUPPORTED();
+        return a + std::string("-I") - b.path;
 #elif defined(__nob_clang__)
-UNSUPPORTED();
+        return a + std::string("-I") - b.path;
 #else
-UNSUPPORTED();
+        return a + std::string("-I") - b.path;
 #endif
     }
 
@@ -267,10 +303,21 @@ UNSUPPORTED();
         case CompilerFlag::Debug: return a + std::string("-Zi"); break;
 #elif defined(__nob_gcc__)
         case CompilerFlag::OptimizeSpeed: return a + std::string("-O2"); break;
-        case CompilerFlag::OptimizeSpace: return a + std::string("-O1"); break;
+        case CompilerFlag::OptimizeSpace: return a + std::string("-Os"); break;
+        case CompilerFlag::Debug: return a + std::string("-g"); break;
 #elif defined(__nob_clang__)
-            // todo
+        case CompilerFlag::OptimizeSpeed: return a + std::string("-O2"); break;
+        case CompilerFlag::OptimizeSpace: return a + std::string("-Os"); break;
+        case CompilerFlag::Debug: return a + std::string("-g"); break;
 #endif
+
+#if defined(_WIN32)
+        case CompilerFlag::PositionIndependentCode: return a; break;
+#else
+        case CompilerFlag::PositionIndependentCode: return a + CustomCompilerFlag{ "-fPIC" }; break;
+#endif
+
+
         case CompilerFlag::KeepLinker:
         {
             size_t loc = a.text.find(" -c");
@@ -301,11 +348,11 @@ UNSUPPORTED();
 #if defined(__nob_msvc__)
         return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find("-link"));
 #elif defined(__nob_gcc__)
-        UNSUPPORTED();
+        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
 #elif defined(__nob_clang__)
-        UNSUPPORTED();
+        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
 #else
-        UNSUPPORTED();
+        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
 #endif
     }
 
@@ -316,26 +363,46 @@ UNSUPPORTED();
         a.text = a.text.substr(0, pos) + "\"" + b.path.string() + "\" " + a.text.substr(pos);
         return a;
 #elif defined(__nob_gcc__)
-UNSUPPORTED();
+        return a + b.path;
 #elif defined(__nob_clang__)
-UNSUPPORTED();
+        return a + b.path;
 #else
-UNSUPPORTED();
-    return a + b.path;  // todo: check this
+        return a + b.path;
 #endif
     }
 
-    LinkCommand operator+(LinkCommand a, LibraryDirectory b)
+    LinkCommand operator+(LinkCommand a, StaticLibraryFile b)
     {
-#if defined(__nob_msvc__)
-        return a + std::string("-libpath:") - b.path;
-#elif defined(__nob_gcc__)
-        UNSUPPORTED();
-#elif defined(__nob_clang__)
-        UNSUPPORTED();
+        if (b.path.extension().string() == "a" or b.path.extension().string() == "lib")
+        {
+#if defined(_WIN32)
+            b.path.replace_extension("lib");
 #else
-        UNSUPPORTED();
+            b.path.replace_extension("a");
 #endif
+        }
+
+#if defined(__nob_msvc__)
+        return a + std::string("-libpath:") - b.path.parent_path() + b.path;
+#elif defined(__nob_gcc__)
+        return a + std::string("-L") - b.path.parent_path() + b.path;
+#elif defined(__nob_clang__)
+        return a + std::string("-L") - b.path.parent_path() + b.path;
+#else
+        return a + std::string("-L") - b.path.parent_path() + b.path;
+#endif
+    }
+
+    LinkCommand operator+(LinkCommand a, DynamicLibraryFile b)
+    {
+#if defined(_WIN32)
+        b.path.replace_extension("dll");
+#elif defined(__APPLE__)
+        b.path.replace_extension("dylib");
+#else
+        b.path.replace_extension("so");
+#endif
+        return a + StaticLibraryFile{ b.path };
     }
 
     LinkCommand operator+(LinkCommand a, ExecutableFile b)
@@ -343,11 +410,11 @@ UNSUPPORTED();
 #if defined(__nob_msvc__)
         return a + std::string("-out:") - b.path;
 #elif defined(__nob_gcc__)
-        UNSUPPORTED();
+        return a + std::string("-o") + b.path;
 #elif defined(__nob_clang__)
-        UNSUPPORTED();
+        return a + std::string("-o") + b.path;
 #else
-        UNSUPPORTED();
+        return a + std::string("-o") + b.path;
 #endif
     }
 
@@ -359,12 +426,14 @@ UNSUPPORTED();
         switch (b)
         {
 #if defined(__nob_msvc__)
-        case LinkerFlag::OutputDLL: return a + std::string("-dll"); break;
+        case LinkerFlag::OutputDynamicLibrary: return a + std::string("-dll"); break;
         case LinkerFlag::Debug: return a + std::string("-debug"); break;
 #elif defined(__nob_gcc__)
-            // todo
+        case LinkerFlag::OutputDynamicLibrary: return a + std::string("-shared"); break;
+        case LinkerFlag::Debug: return a + std::string("-g"); break;
 #elif defined(__nob_clang__)
-            // todo
+        case LinkerFlag::OutputDynamicLibrary: return a + std::string("-shared"); break;
+        case LinkerFlag::Debug: return a + std::string("-g"); break;
 #endif
         default:
             std::cout << "LinkerFlag is not supported by your compiler.\n"; return a;
@@ -376,6 +445,21 @@ UNSUPPORTED();
     LinkCommand operator+(LinkCommand a, CustomLinkerFlag b)
     {
         return (Command)a + b.flag;
+    }
+
+
+    LibraryCommand operator+(LibraryCommand a, ObjectFile b)
+    {
+        return a + b.path;
+    }
+
+    LibraryCommand operator+(LibraryCommand a, StaticLibraryFile b)
+    {
+#if defined(__nob_msvc__)
+        return a + std::string("-out:") - b.path;
+#else
+        return a + b.path;
+#endif
     }
 
 
