@@ -7,11 +7,11 @@ int main(int argc, char** argv)
 {
     nob::Init(argc, argv, __FILE__);
 
-    std::cout << "Compiling " << (std::filesystem::current_path() / "src").string() << std::endl;
+    nob::Log("Compiling " + (std::filesystem::current_path() / "src").string() + "\n", nob::LogType::Info);
 
     if (std::filesystem::remove_all(std::filesystem::current_path() / "bin"))
     {
-        std::cout << "Pre-existing binaries deleted.\n";
+        nob::Log("Pre-existing binaries deleted.\n", nob::LogType::Info);
     }
     std::filesystem::create_directories(std::filesystem::current_path() / "bin" / "int");
 

@@ -19,7 +19,7 @@
 *   nob::Init(argv, argc, __FILE__);
 * 
 * This line will rebuild the binary if the source file has been edited since the last compile.
-* It also initialises some default commands, if flags like -debug or -verbose are supplied.
+* It also initialises some default commands, if flags like -debug or -silent are supplied.
 * 
 * nobpp.hpp consists of two 'layers' of functionality. The first uses the struct nob::Command
 * to execute commands. Arguments are passed to these commands with overloads of the + operator
@@ -56,7 +56,7 @@ namespace nob
         std::string text;
         std::filesystem::path path = std::filesystem::current_path();
 
-        void Run(bool suppressOutput = true);
+        void Run(bool suppressOutput = false);
     };
 
     Command operator+(Command a, std::string b);
@@ -127,12 +127,21 @@ namespace nob
 
     extern CompileCommand DefaultCompileCommand;
     extern LinkCommand DefaultLinkCommand;
-    extern bool IsVerbose;
+    extern bool IsSilent;
 
     void CompileDirectory(std::filesystem::path src, std::filesystem::path obj, CompileCommand cmd = DefaultCompileCommand, bool runAsync = false);
     void LinkDirectory(std::filesystem::path obj, std::filesystem::path exe, LinkCommand cmd = DefaultLinkCommand);
 
     void Init(int argc, char** argv, std::string srcName, bool askForFlags = false);
+
+    enum LogType
+    {
+        None = -1,
+        Info = 0,
+        Run = 1,
+    };
+
+    void Log(std::string s, LogType t = LogType::None);
 }
 
 #endif
@@ -154,20 +163,24 @@ namespace nob
 #define __nob_gcc__
 #endif
 
+#if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
+#include <Windows.h>  // for logging :(
+#endif
 
 namespace nob
 {
     void Command::Run(bool suppressOutput)
     {
-        if (IsVerbose)
+        if (IsSilent)
         {
-            suppressOutput = false;
+            suppressOutput = true;
         }
 
-        std::cout << "[RUN] " << text;
+        Log(text, LogType::Run);
+
         if (!suppressOutput)
         {
-            std::cout << std::endl;
+            Log("\n");
         }
 
         std::system(("\"" + text + "\"" + (suppressOutput ?
@@ -178,7 +191,7 @@ namespace nob
 #endif            
             : "")).c_str());
 
-        std::cout << std::string(suppressOutput ? " " : "") + "[RUN FINISHED]" << std::endl;
+        Log("FINISHED\n", LogType::Run);
     }
 
     Command operator+(Command a, std::string b)
@@ -238,8 +251,7 @@ namespace nob
 #elif defined(__nob_clang__)
             "clang++ -c",
 #else
-            ([]() {std::cout << "Error: CompileCommand used with unknown compiler. "
-                               "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
+            ([]() {Log("Error: CompileCommand used with unknown compiler. Please define the NOBPP_COMPILER macro with the location of the compiler.\n", LogType::Info);return "";})(),
 #endif
             path })
     {
@@ -262,8 +274,7 @@ namespace nob
 #elif defined(__nob_clang__)
             "clang++",
 #else
-            ([]() {std::cout << "Error: CompileCommand used with unknown compiler. "
-                               "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
+            ([]() {Log("Error: LinkCommand used with unknown linker. Please define the NOBPP_LINKER macro with the location of the linker.\n", LogType::Info);return "";})(),
 #endif
             path })
     {
@@ -277,8 +288,8 @@ namespace nob
 
     nob::LibraryCommand::LibraryCommand(std::filesystem::path path)
         : Command({
-#if defined(NOBPP_LINKER_COMMAND)
-            NOBPP_LINKER_COMMAND,
+#if defined(NOBPP_LIBRARY_COMMAND)
+            NOBPP_LIBRARY_COMMAND,
 #elif defined(__nob_msvc__)
             "lib",
 #elif defined(__nob_gcc__)
@@ -286,8 +297,7 @@ namespace nob
 #elif defined(__nob_clang__)
             "ar -rcs",
 #else
-            ([]() {std::cout << "Error: LibraryCommand used with unknown compiler. "
-                               "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
+            ([]() {Log("Error: LibraryCommand used with unknown library archiver. Please define the NOBPP_LIBRARY macro with the location of the library archiver.\n", LogType::Info);return "";})(),
 #endif
             path })
     {
@@ -297,9 +307,6 @@ namespace nob
         : Command(cmd)
     {
     }
-
-
-// #define UNSUPPORTED() std::cout << "Error: This feature is not yet supported for the compiler you are using.\n"; return a
 
 
     CompileCommand operator+(CompileCommand a, SourceFile b)
@@ -392,7 +399,7 @@ namespace nob
             }
         }
         default:
-            std::cout << "CompilerFlag is not supported by your compiler.\n"; return a;
+            Log("CompilerFlag is not supported by your compiler.\n", LogType::Info); return a;
             break;
         }
 #endif
@@ -496,7 +503,7 @@ namespace nob
         case LinkerFlag::Debug: return a + std::string("-g"); break;
 #endif
         default:
-            std::cout << "LinkerFlag is not supported by your compiler.\n"; return a;
+            Log("LinkerFlag is not supported by your compiler.\n", LogType::Info); return a;
             break;
         }
 #endif
@@ -557,13 +564,13 @@ namespace nob
 
     CompileCommand DefaultCompileCommand = {};
     LinkCommand DefaultLinkCommand = {};
-    bool IsVerbose = false;
+    bool IsSilent = false;
 
     void Init(int argc, char** argv, std::string srcName, bool askForFlags)
     {
         if (argc < 1)
         {
-            std::cout << "Why no args?\n";
+            Log("Why no args?\n", LogType::Info);
             return;
         }
 
@@ -574,7 +581,7 @@ namespace nob
 
             if (!std::filesystem::exists(binPath) or !std::filesystem::exists(srcPath))
             {
-                std::cout << "Source and/or binary not found.\n";
+                Log("Source and/or binary not found.\n", LogType::Info);
             }
             else
             {
@@ -582,14 +589,14 @@ namespace nob
                 std::filesystem::path oldBinPath = binPath.parent_path() / (binPath.filename().string() + ".old");
                 if (std::filesystem::exists(oldBinPath))
                 {
-                    std::cout << "Deleting " << oldBinPath.filename() << "...\n";
+                    Log("Deleting " + oldBinPath.filename().string() + "...\n", LogType::Info);
                     std::filesystem::remove(oldBinPath);
                 }
 
                 // rebuild if source is younger than binary
                 if (std::filesystem::last_write_time(binPath) < std::filesystem::last_write_time(srcPath))
                 {
-                    std::cout << "Source change detected, rebuilding...\n";
+                    Log("Source change detected, rebuilding...\n", LogType::Info);
                     
                     // rename to <binary>.old
                     std::filesystem::rename(binPath, oldBinPath);
@@ -642,15 +649,43 @@ namespace nob
                 DefaultCompileCommand = DefaultCompileCommand + CompilerFlag::Debug;
                 DefaultLinkCommand = DefaultLinkCommand + LinkerFlag::Debug;
             }
-            else if (args[i] == "-verbose")
+            else if (args[i] == "-silent")
             {
-                IsVerbose = true;
+                IsSilent = true;
             }
             else
             {
-                std::cout << "Argument not supported: " << args[i] << "\n";
+                Log("Argument not supported: " + args[i] + "\n", LogType::Info);
             }
         }
+    }
+
+    void Log(std::string s, LogType t)
+    {
+        std::string prefix = t == LogType::Info ? "[INFO] " : (t == LogType::Run ? "[RUN]  " : "");
+
+#ifdef NOBPP_CUSTOM_LOG
+        NOBPP_CUSTOM_LOG((prefix + s));
+#else
+
+#ifdef _WIN32
+        HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (t == LogType::Info)
+            SetConsoleTextAttribute(console, 3);
+        else if (t == LogType::Run)
+            SetConsoleTextAttribute(console, 2);
+        std::cout << prefix + s;
+        SetConsoleTextAttribute(console, 15);
+#else
+        if (t == LogType::Info)
+            std::cout << "\033[1;34m" + prefix + s + "\033[0m";
+        else if (t == LogType::Run)
+            std::cout << "\033[1;32m" + prefix + s + "\033[0m";
+        else
+            std::cout << prefix + s;
+#endif
+
+#endif
     }
 }
 
