@@ -1,3 +1,47 @@
+/* NobPP Header-Only C++ Build System
+*
+* This project is heavily inspired by Tsoding's nob.h. (see https://github.com/tsoding/nob.h)
+* The goal of nobpp.hpp is to rewrite nob.h in C++ and specifcally for C++ applications. Much
+* of the functionality of nob.h is implemented in std::filesystem, so this library implements
+* only a subset of nob.h's functionality. For this reason, nobpp.hpp requires C++17.
+* 
+* nobpp.hpp also introduces an extra set of cross-platform functions to simplify things.
+* 
+* To use this library, simply create a build.cpp file in the same directory as this file with
+* the following lines:
+* 
+*   #define NOBPP_IMPLEMENTATION
+*   #include "nobpp.hpp"
+* 
+* If you wish to enable auto-rebuild and command line arguments, add the following line to the
+* start of your main function:
+* 
+*   nob::Init(argv, argc, __FILE__);
+* 
+* This line will rebuild the binary if the source file has been edited since the last compile.
+* It also initialises some default commands, if flags like -debug or -verbose are supplied.
+* 
+* nobpp.hpp consists of two 'layers' of functionality. The first uses the struct nob::Command
+* to execute commands. Arguments are passed to these commands with overloads of the + operator
+* (or - if you do not wish for a space to be placed between two arguments). Currently strings
+* and std::filesystem::path's can be used as arguments.
+* 
+* The second layer involves the nob::CompileCommand, nob::LinkCommand and nob::LibraryCommand
+* structs and executes commands specific to a C++ compiler. There are a range of higher-level
+* argument types that can be supplied to these commands, and when run, these will run commands
+* specific to the compiler used (GCC, MSVC and Clang are supported).
+* 
+* To compile the build.cpp file, use the command below that corresponds to your compiler:
+* 
+* MSVC:  cl -EHsc build.cpp -std:c++17
+* GCC:   g++ build.cpp -std=c++17
+* Clang: clang++ build.cpp -std=c++17
+* 
+* Note: For the MSVC cl.exe to work you must run it via the Developer Command Prompt for VS.
+* This also means that the resulting binary should be run via this command prompt.
+*/
+
+
 #ifndef NOBPP_HEADER
 #define NOBPP_HEADER
 // nobpp header
@@ -51,7 +95,14 @@ namespace nob
     struct ExecutableFile { std::filesystem::path path; };
     struct AddLinkCommand { LinkCommand lc; };  // it is really annoying that this has to exist, but CompilerCommand + LinkCommand is ambiguous because LinkCommand casts to a path
 
-    enum class CompilerFlag { OptimizeSpeed, OptimizeSpace, KeepLinker, Debug, PositionIndependentCode };
+    enum class CompilerFlag
+    {
+        OptimizeSpeed, OptimizeSpace,
+        KeepLinker,
+        Debug,
+        PositionIndependentCode,
+        CPPVersion14, CPPVersion17, CPPVersion20,
+    };
     enum class LinkerFlag { OutputDynamicLibrary, Debug };
     struct CustomCompilerFlag { std::string flag; };
     struct CustomLinkerFlag { std::string flag; };
@@ -183,9 +234,9 @@ namespace nob
 #elif defined(__nob_msvc__)
             "cl -c -EHsc",
 #elif defined(__nob_gcc__)
-            "g++ -c",  // todo: verify
+            "g++ -c",
 #elif defined(__nob_clang__)
-            "clang++ -c",  // todo: verify
+            "clang++ -c",
 #else
             ([]() {std::cout << "Error: CompileCommand used with unknown compiler. "
                                "Please define the NOBPP_COMPILER macro with the location of the compiler.\n";return "";})(),
@@ -301,14 +352,23 @@ namespace nob
         case CompilerFlag::OptimizeSpeed: return a + std::string("-O2"); break;
         case CompilerFlag::OptimizeSpace: return a + std::string("-O1"); break;
         case CompilerFlag::Debug: return a + std::string("-Zi"); break;
+        case CompilerFlag::CPPVersion14: return a + std::string("-std:c++14"); break;
+        case CompilerFlag::CPPVersion17: return a + std::string("-std:c++17"); break;
+        case CompilerFlag::CPPVersion20: return a + std::string("-std:c++20"); break;
 #elif defined(__nob_gcc__)
         case CompilerFlag::OptimizeSpeed: return a + std::string("-O2"); break;
         case CompilerFlag::OptimizeSpace: return a + std::string("-Os"); break;
         case CompilerFlag::Debug: return a + std::string("-g"); break;
+        case CompilerFlag::CPPVersion14: return a + std::string("-std=c++14"); break;
+        case CompilerFlag::CPPVersion17: return a + std::string("-std=c++17"); break;
+        case CompilerFlag::CPPVersion20: return a + std::string("-std=c++20"); break;
 #elif defined(__nob_clang__)
         case CompilerFlag::OptimizeSpeed: return a + std::string("-O2"); break;
         case CompilerFlag::OptimizeSpace: return a + std::string("-Os"); break;
         case CompilerFlag::Debug: return a + std::string("-g"); break;
+        case CompilerFlag::CPPVersion14: return a + std::string("-std=c++14"); break;
+        case CompilerFlag::CPPVersion17: return a + std::string("-std=c++17"); break;
+        case CompilerFlag::CPPVersion20: return a + std::string("-std=c++20"); break;
 #endif
 
 #if defined(_WIN32)
@@ -534,9 +594,10 @@ namespace nob
                     // rename to <binary>.old
                     std::filesystem::rename(binPath, oldBinPath);
 
-                    // compile and run the new binary           // todo: add vvv as a CompilerFlag
-                    (CompileCommand() + SourceFile{ srcPath } + CustomCompilerFlag{ "-std:c++17" }
-                    + ObjectFile{ std::filesystem::temp_directory_path() / srcPath.filename().replace_extension(".obj") } + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
+                    // compile and run the new binary
+                    (CompileCommand() + SourceFile{ srcPath } + CompilerFlag::CPPVersion17
+                    + ObjectFile{ std::filesystem::temp_directory_path() / srcPath.filename().replace_extension(".obj") }
+                    + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
 
                     Command newBinCmd;
                     newBinCmd = newBinCmd + binPath + std::string("-norebuild");
