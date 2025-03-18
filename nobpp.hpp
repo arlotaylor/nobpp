@@ -1,4 +1,4 @@
-/* NobPP Header-Only C++ Build System
+/* NobPP Header-Only C++ Build System (https://github.com/arlotaylor/nobpp)
 *
 * This project is heavily inspired by Tsoding's nob.h. (see https://github.com/tsoding/nob.h)
 * The goal of nobpp.hpp is to rewrite nob.h in C++ and specifcally for C++ applications. Much
