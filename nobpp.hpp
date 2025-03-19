@@ -63,6 +63,8 @@ namespace nob
     Command operator-(Command a, std::string b);
     Command operator+(Command a, std::filesystem::path b);
     Command operator-(Command a, std::filesystem::path b);
+    Command operator+(Command a, Command b);
+    Command operator-(Command a, Command b);
 
     template<typename T> void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync = true);
 
@@ -102,11 +104,11 @@ namespace nob
         Debug,
         PositionIndependentCode,
         CPPVersion14, CPPVersion17, CPPVersion20,
+        NoObjectFile,
     };
     enum class LinkerFlag { OutputDynamicLibrary, Debug };
     struct CustomCompilerFlag { std::string flag; };
     struct CustomLinkerFlag { std::string flag; };
-
 
     CompileCommand operator+(CompileCommand a, SourceFile b);
     CompileCommand operator+(CompileCommand a, ObjectFile b);
@@ -214,6 +216,15 @@ namespace nob
         return a - ("\"" + b.string() + "\"");
     }
 
+    Command operator+(Command a, Command b)
+    {
+        return a + std::string("&&") + b.text;
+    }
+
+    Command operator-(Command a, Command b)
+    {
+        return a + b.text;
+    }
 
     template<typename T>
     void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync)
@@ -398,6 +409,17 @@ namespace nob
                 return a;
             }
         }
+        case CompilerFlag::NoObjectFile:
+        {
+            size_t loc = a.text.find(" ");
+
+            // perform surgery so that this command is always overriden if + ObjectFile is used
+            std::string tmp = a.text.substr(loc);
+            a.text = a.text.substr(0, loc);
+            a = a + ObjectFile{ std::filesystem::temp_directory_path() / "nobDeletedObj.o" };
+            a.text += tmp;
+            return a;
+        }
         default:
             Log("CompilerFlag is not supported by your compiler.\n", LogType::Info); return a;
             break;
@@ -410,16 +432,51 @@ namespace nob
         return (Command)a + b.flag;
     }
 
+    LinkCommand AddDefaultOutputToLinker(CompileCommand a, LinkCommand b)
+    {
+        if (b.text.find(" -o") != std::string::npos)
+        {
+            return b;
+        }
+        else
+        {
+            for (int i = 0; i < a.text.size() - 1; i++)
+            {
+                if (a.text[i] == ' ' and a.text[i + 1] != ' ' and a.text[i + 1] != '-')
+                {  // an argument with no - prefix is a source file
+                    std::filesystem::path file;
+                    
+                    if (a.text[i + 1] == '"')
+                    {
+                        file = a.text.substr(i + 2, a.text.substr(i + 2).find('"'));
+                    }
+                    else
+                    {
+                        file = a.text.substr(i + 1, a.text.substr(i + 1).find(' '));
+                    }
+#ifdef _WIN32
+                    file = file.replace_extension("exe");
+#else
+                    file = file.replace_extension("");
+#endif
+                    return b + ExecutableFile{ file };
+                }
+            }
+
+            return b;
+        }
+    }
+
     CompileCommand operator+(CompileCommand a, AddLinkCommand b)
     {
 #if defined(__nob_msvc__)
-        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find("-link"));
+        return a + CompilerFlag::KeepLinker + CompilerFlag::NoObjectFile + AddDefaultOutputToLinker(a, b.lc).text.substr(b.lc.text.find("-link"));
 #elif defined(__nob_gcc__)
-        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
+        return a + CompilerFlag::KeepLinker + CompilerFlag::NoObjectFile + AddDefaultOutputToLinker(a, b.lc).text.substr(b.lc.text.find(" "));
 #elif defined(__nob_clang__)
-        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
+        return a + CompilerFlag::KeepLinker + CompilerFlag::NoObjectFile + AddDefaultOutputToLinker(a, b.lc).text.substr(b.lc.text.find(" "));
 #else
-        return a + CompilerFlag::KeepLinker + b.lc.text.substr(b.lc.text.find(" "));
+        return a + CompilerFlag::KeepLinker + CompilerFlag::NoObjectFile + AddDefaultOutputToLinker(a, b.lc).text.substr(b.lc.text.find(" "));
 #endif
     }
 
