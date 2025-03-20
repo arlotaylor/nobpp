@@ -90,6 +90,7 @@ namespace nob
     struct SourceFile { std::filesystem::path path; };
     struct ObjectFile { std::filesystem::path path; };
     struct IncludeDirectory { std::filesystem::path path; };
+    struct MacroDefinition { std::string macro; std::string definition; };
 
     struct StaticLibraryFile { std::filesystem::path path; };  // is either .lib or .a
     struct DynamicLibraryFile { std::filesystem::path path; };  // is either .dll, .so or .dylib
@@ -113,6 +114,7 @@ namespace nob
     CompileCommand operator+(CompileCommand a, SourceFile b);
     CompileCommand operator+(CompileCommand a, ObjectFile b);
     CompileCommand operator+(CompileCommand a, IncludeDirectory b);
+    CompileCommand operator+(CompileCommand a, MacroDefinition b);
     CompileCommand operator+(CompileCommand a, CompilerFlag b);
     CompileCommand operator+(CompileCommand a, CustomCompilerFlag b);
     CompileCommand operator+(CompileCommand a, AddLinkCommand b);
@@ -134,7 +136,7 @@ namespace nob
     void CompileDirectory(std::filesystem::path src, std::filesystem::path obj, CompileCommand cmd = DefaultCompileCommand, bool runAsync = false);
     void LinkDirectory(std::filesystem::path obj, std::filesystem::path exe, LinkCommand cmd = DefaultLinkCommand);
 
-    void Init(int argc, char** argv, std::string srcName, bool askForFlags = false);
+    std::vector<std::string> Init(int argc, char** argv, std::string srcName, bool askForFlags = false);
 
     enum LogType
     {
@@ -356,6 +358,19 @@ namespace nob
         return a + std::string("-I") - b.path;
 #else
         return a + std::string("-I") - b.path;
+#endif
+    }
+
+    CompileCommand operator+(CompileCommand a, MacroDefinition b)
+    {
+#if defined(__nob_msvc__)
+        return a + ("-D" + b.macro + "=" + b.definition);
+#elif defined(__nob_gcc__)
+        return a + ("-D" + b.macro + "=" + b.definition);
+#elif defined(__nob_clang__)
+        return a + ("-D" + b.macro + "=" + b.definition);
+#else
+        return a + ("-D" + b.macro + "=" + b.definition);
 #endif
     }
 
@@ -623,7 +638,29 @@ namespace nob
     LinkCommand DefaultLinkCommand = {};
     bool IsSilent = false;
 
-    void Init(int argc, char** argv, std::string srcName, bool askForFlags)
+
+    std::string AddEscapes(std::string inp)
+    {
+        std::string ret = "";
+        for (int i = 0; i < inp.size(); i++)
+        {
+            switch (inp[i])
+            {
+            case '\n': ret += "\\n"; break;
+            case '\t': ret += "\\t"; break;
+            case '\r': ret += "\\r"; break;
+            case '\a': ret += "\\a"; break;
+            case '\b': ret += "\\t"; break;
+            case '\t': ret += "\\t"; break;
+            case '\0': ret += "\\0"; break;
+            case '\'': ret += "\\\'"; break;
+            case '\"': ret += "\\\""; break;
+            default: ret += inp[i]; break;
+            }
+        }
+    }
+
+    std::vector<std::string> Init(int argc, char** argv, std::string srcName, bool askForFlags)
     {
         if (argc < 1)
         {
@@ -631,7 +668,7 @@ namespace nob
             return;
         }
 
-        if (!(argc > 1 and std::string(argv[1]) == "-norebuild"))
+        if (!(argc > 1 and std::string(argv[1]) == "-norebuild") and !(argc > 2 and std::string(argv[2]) == "-norebuild"))
         {
             std::filesystem::path binPath = { argv[0] };
             std::filesystem::path srcPath = binPath.parent_path() / srcName;
@@ -660,6 +697,9 @@ namespace nob
 
                     // compile and run the new binary
                     (CompileCommand() + SourceFile{ srcPath } + CompilerFlag::CPPVersion17
+#ifdef NOBPP_INIT_SCRIPT
+                    + MarcoDefinition{ "NOBPP_INIT_SCRIPT",  }
+#endif
                     + ObjectFile{ std::filesystem::temp_directory_path() / srcPath.filename().replace_extension(".obj") }
                     + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
 
@@ -674,6 +714,20 @@ namespace nob
                 }
             }
         }
+
+#ifdef NOBPP_INIT_SCRIPT
+        if (!(argc > 1 and std::string(argv[1]) == "-noinitscript"))
+        {
+            Command newBinCmd;
+            newBinCmd = newBinCmd + std::filesystem::path{ argv[0] } + std::string("-noinitscript");
+            for (int i = 1; i < argc; i++)
+            {
+                newBinCmd = newBinCmd + std::string(argv[i]);
+            }
+            ((Command() + std::string(NOBPP_INIT_SCRIPT)) + newBinCmd).Run();
+            std::exit(0);
+        }
+#endif
 
         std::vector<std::string> args;
         if (askForFlags and (argc < 2 or (argc == 2 and std::string(argv[1]) == "-norebuild")))
@@ -712,9 +766,11 @@ namespace nob
             }
             else
             {
-                Log("Argument not supported: " + args[i] + "\n", LogType::Info);
+                // Log("Argument not supported: " + args[i] + "\n", LogType::Info);
             }
         }
+
+        return args;
     }
 
     void Log(std::string s, LogType t)
