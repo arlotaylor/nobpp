@@ -17,10 +17,12 @@ int main(int argc, char** argv)
 #ifdef NOBPP_INIT_SCRIPT
          + nob::MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
 #endif
-         + nob::IncludeDirectory{ std::filesystem::current_path() }
+         + nob::IncludeDirectory{ std::filesystem::absolute(std::filesystem::path{ argv[0] }).parent_path() }
          + nob::AddLinkCommand{ nob::LinkCommand() }
         ).Run();
     }
+
+    // std::getline(std::cin, std::string());
 
     return 0;
 }

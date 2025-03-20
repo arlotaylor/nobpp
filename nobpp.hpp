@@ -716,7 +716,7 @@ namespace nob
     {
         for (int i = 1; i < argc; i++)
         {
-            cmd = cmd + std::string(argv[i]);
+            cmd = cmd + ("\"" + std::string(argv[i]) + "\"");
         }
         return cmd;
     }
@@ -767,6 +767,17 @@ namespace nob
         std::filesystem::path binPath = { argv[0] };
         std::filesystem::path srcPath = binPath.parent_path() / srcName;
 
+#ifdef NOBPP_INIT_SCRIPT
+        if (!CLFlags[CLArgument::NoInitScript])  // init script can be run
+        {
+            Command newBinCmd;
+            newBinCmd = newBinCmd + binPath + std::string("-noinitscript");
+            newBinCmd = AddArgs(newBinCmd, argc, argv);
+            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false);
+            std::exit(0);
+        }
+#endif
+
         if (!CLFlags[CLArgument::NoRebuild] and std::filesystem::exists(srcPath))  // rebuild can be checked
         {
             // delete <binary>.old
@@ -800,16 +811,6 @@ namespace nob
             }
         }
 
-#ifdef NOBPP_INIT_SCRIPT
-        if (!CLFlags[CLArgument::NoInitScript])  // init script can be run
-        {
-            Command newBinCmd;
-            newBinCmd = newBinCmd + binPath + std::string("-noinitscript");
-            newBinCmd = AddArgs(newBinCmd, argc, argv);
-            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false);
-            std::exit(0);
-        }
-#endif
 
         if (CLFlags[CLArgument::Debug])
         {
