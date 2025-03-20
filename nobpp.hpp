@@ -48,6 +48,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <bitset>
 
 namespace nob
 {
@@ -131,12 +132,23 @@ namespace nob
 
     extern CompileCommand DefaultCompileCommand;
     extern LinkCommand DefaultLinkCommand;
-    extern bool IsSilent;
 
     void CompileDirectory(std::filesystem::path src, std::filesystem::path obj, CompileCommand cmd = DefaultCompileCommand, bool runAsync = false);
     void LinkDirectory(std::filesystem::path obj, std::filesystem::path exe, LinkCommand cmd = DefaultLinkCommand);
 
-    std::vector<std::string> Init(int argc, char** argv, std::string srcName, bool askForFlags = false);
+    enum CLArgument
+    {
+        NoRebuild = 0,
+        NoInitScript,
+        Debug,
+        Silent,
+        Count,
+    };
+
+    extern std::bitset<CLArgument::Count> CLFlags;
+    extern std::vector<std::string> OtherCLArguments;
+
+    void Init(int argc, char** argv, std::string srcName);
 
     enum LogType
     {
@@ -167,6 +179,10 @@ namespace nob
 #define __nob_gcc__
 #endif
 
+#if !defined(NOBPP_INIT_SCRIPT) && defined(__nob_msvc__)
+#error
+#endif
+
 #if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
 #include <Windows.h>  // for logging :(
 #endif
@@ -175,7 +191,7 @@ namespace nob
 {
     void Command::Run(bool suppressOutput)
     {
-        if (IsSilent)
+        if (CLFlags[CLArgument::Silent])
         {
             suppressOutput = true;
         }
@@ -253,12 +269,69 @@ namespace nob
     }
 
 
+    std::string AddEscapes(std::string inp)
+    {
+        std::string ret = "";
+        for (int i = 0; i < inp.size(); i++)
+        {
+            switch (inp[i])
+            {
+            case '\'': ret += "\\\'"; break;
+            case '\"': ret += "\\\""; break;
+            case '\?': ret += "\\\?"; break;
+            case '\\': ret += "\\\\"; break;
+            case '\a': ret += "\\a"; break;
+            case '\b': ret += "\\b"; break;
+            case '\f': ret += "\\f"; break;
+            case '\n': ret += "\\n"; break;
+            case '\r': ret += "\\r"; break;
+            case '\t': ret += "\\t"; break;
+            case '\v': ret += "\\v"; break;
+            default: ret += inp[i]; break;
+            }
+        }
+        return ret;
+    }
+
+    std::string RemoveEscapes(std::string inp)
+    {
+        std::string ret = "";
+        for (int i = 0; i < inp.size(); i++)
+        {
+            if (inp[i] == '\\')
+            {
+                i++;
+                switch (inp[i])
+                {
+                case '\'': ret += "\'"; break;
+                case '\"': ret += "\""; break;
+                case '\?': ret += "\?"; break;
+                case '\\': ret += "\\"; break;
+                case '\a': ret += "a"; break;
+                case '\b': ret += "b"; break;
+                case '\f': ret += "f"; break;
+                case '\n': ret += "n"; break;
+                case '\r': ret += "r"; break;
+                case '\t': ret += "t"; break;
+                case '\v': ret += "v"; break;
+                default: Log("Error: unrecognized escape code cannot be removed."); break;
+                }
+            }
+            else
+            {
+                ret += inp[i];
+            }
+        }
+        return ret;
+    }
+
+
     CompileCommand::CompileCommand(std::filesystem::path path)
         : Command({
 #if defined(NOBPP_COMPILER_COMMAND)
             NOBPP_COMPILER_COMMAND,
 #elif defined(__nob_msvc__)
-            "cl -c -EHsc",
+            "cl -c -EHsc -nologo",
 #elif defined(__nob_gcc__)
             "g++ -c",
 #elif defined(__nob_clang__)
@@ -281,7 +354,7 @@ namespace nob
 #if defined(NOBPP_LINKER_COMMAND)
             NOBPP_LINKER_COMMAND,
 #elif defined(__nob_msvc__)
-            "cl -link",
+            "cl -nologo -link",
 #elif defined(__nob_gcc__)
             "g++",
 #elif defined(__nob_clang__)
@@ -364,13 +437,13 @@ namespace nob
     CompileCommand operator+(CompileCommand a, MacroDefinition b)
     {
 #if defined(__nob_msvc__)
-        return a + ("-D" + b.macro + "=" + b.definition);
+        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
 #elif defined(__nob_gcc__)
-        return a + ("-D" + b.macro + "=" + b.definition);
+        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
 #elif defined(__nob_clang__)
-        return a + ("-D" + b.macro + "=" + b.definition);
+        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
 #else
-        return a + ("-D" + b.macro + "=" + b.definition);
+        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
 #endif
     }
 
@@ -636,31 +709,48 @@ namespace nob
 
     CompileCommand DefaultCompileCommand = {};
     LinkCommand DefaultLinkCommand = {};
-    bool IsSilent = false;
+    std::bitset<CLArgument::Count> CLFlags;
+    std::vector<std::string> OtherCLArguments;
 
-
-    std::string AddEscapes(std::string inp)
+    Command AddArgs(Command cmd, int argc, char** argv)
     {
-        std::string ret = "";
-        for (int i = 0; i < inp.size(); i++)
+        for (int i = 1; i < argc; i++)
         {
-            switch (inp[i])
+            cmd = cmd + std::string(argv[i]);
+        }
+        return cmd;
+    }
+
+    
+
+    void ConsumeFlags(int argc, char** argv)
+    {
+        for (int i = 1; i < argc; i++)
+        {
+            if (std::string(argv[i]) == "-norebuild")
             {
-            case '\n': ret += "\\n"; break;
-            case '\t': ret += "\\t"; break;
-            case '\r': ret += "\\r"; break;
-            case '\a': ret += "\\a"; break;
-            case '\b': ret += "\\t"; break;
-            case '\t': ret += "\\t"; break;
-            case '\0': ret += "\\0"; break;
-            case '\'': ret += "\\\'"; break;
-            case '\"': ret += "\\\""; break;
-            default: ret += inp[i]; break;
+                CLFlags.set(CLArgument::NoRebuild);
+            }
+            else if (std::string(argv[i]) == "-noinitscript")
+            {
+                CLFlags.set(CLArgument::NoInitScript);
+            }
+            else if (std::string(argv[i]) == "-debug")
+            {
+                CLFlags.set(CLArgument::Debug);
+            }
+            else if (std::string(argv[i]) == "-silent")
+            {
+                CLFlags.set(CLArgument::Silent);
+            }
+            else 
+            {
+                OtherCLArguments.push_back(argv[i]);
             }
         }
     }
 
-    std::vector<std::string> Init(int argc, char** argv, std::string srcName, bool askForFlags)
+    void Init(int argc, char** argv, std::string srcName)
     {
         if (argc < 1)
         {
@@ -668,109 +758,64 @@ namespace nob
             return;
         }
 
-        if (!(argc > 1 and std::string(argv[1]) == "-norebuild") and !(argc > 2 and std::string(argv[2]) == "-norebuild"))
+        // load the flags and arguments
+        CLFlags.reset();
+        OtherCLArguments.clear();
+        ConsumeFlags(argc, argv);
+
+        // get relevant files
+        std::filesystem::path binPath = { argv[0] };
+        std::filesystem::path srcPath = binPath.parent_path() / srcName;
+
+        if (!CLFlags[CLArgument::NoRebuild] and std::filesystem::exists(srcPath))  // rebuild can be checked
         {
-            std::filesystem::path binPath = { argv[0] };
-            std::filesystem::path srcPath = binPath.parent_path() / srcName;
-
-            if (!std::filesystem::exists(binPath) or !std::filesystem::exists(srcPath))
+            // delete <binary>.old
+            std::filesystem::path oldBinPath = binPath.parent_path() / (binPath.filename().string() + ".old");
+            if (std::filesystem::exists(oldBinPath))
             {
-                Log("Source and/or binary not found.\n", LogType::Info);
+                Log("Deleting " + oldBinPath.filename().string() + "...\n", LogType::Info);
+                std::filesystem::remove(oldBinPath);
             }
-            else
+
+            // rebuild if source is younger than binary
+            if (std::filesystem::last_write_time(binPath) < std::filesystem::last_write_time(srcPath))
             {
-                // delete <binary>.old
-                std::filesystem::path oldBinPath = binPath.parent_path() / (binPath.filename().string() + ".old");
-                if (std::filesystem::exists(oldBinPath))
-                {
-                    Log("Deleting " + oldBinPath.filename().string() + "...\n", LogType::Info);
-                    std::filesystem::remove(oldBinPath);
-                }
+                Log("Source change detected, rebuilding...\n", LogType::Info);
+                
+                // rename to <binary>.old
+                std::filesystem::rename(binPath, oldBinPath);
 
-                // rebuild if source is younger than binary
-                if (std::filesystem::last_write_time(binPath) < std::filesystem::last_write_time(srcPath))
-                {
-                    Log("Source change detected, rebuilding...\n", LogType::Info);
-                    
-                    // rename to <binary>.old
-                    std::filesystem::rename(binPath, oldBinPath);
-
-                    // compile and run the new binary
-                    (CompileCommand() + SourceFile{ srcPath } + CompilerFlag::CPPVersion17
+                // compile and run the new binary
+                (CompileCommand() + SourceFile{ srcPath } + CompilerFlag::CPPVersion17
 #ifdef NOBPP_INIT_SCRIPT
-                    + MarcoDefinition{ "NOBPP_INIT_SCRIPT",  }
+                + MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
 #endif
-                    + ObjectFile{ std::filesystem::temp_directory_path() / srcPath.filename().replace_extension(".obj") }
-                    + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
+                + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
 
-                    Command newBinCmd;
-                    newBinCmd = newBinCmd + binPath + std::string("-norebuild");
-                    for (int i = 1; i < argc; i++)
-                    {
-                        newBinCmd = newBinCmd + std::string(argv[i]);
-                    }
-                    newBinCmd.Run(false);
-                    std::exit(0);
-                }
+                Command newBinCmd;
+                newBinCmd = newBinCmd + binPath + std::string("-norebuild");
+                newBinCmd = AddArgs(newBinCmd, argc, argv);
+                newBinCmd.Run(false);
+                std::exit(0);
             }
         }
 
 #ifdef NOBPP_INIT_SCRIPT
-        if (!(argc > 1 and std::string(argv[1]) == "-noinitscript"))
+        if (!CLFlags[CLArgument::NoInitScript])  // init script can be run
         {
             Command newBinCmd;
-            newBinCmd = newBinCmd + std::filesystem::path{ argv[0] } + std::string("-noinitscript");
-            for (int i = 1; i < argc; i++)
-            {
-                newBinCmd = newBinCmd + std::string(argv[i]);
-            }
-            ((Command() + std::string(NOBPP_INIT_SCRIPT)) + newBinCmd).Run();
+            newBinCmd = newBinCmd + binPath + std::string("-noinitscript");
+            newBinCmd = AddArgs(newBinCmd, argc, argv);
+            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false);
             std::exit(0);
         }
 #endif
 
-        std::vector<std::string> args;
-        if (askForFlags and (argc < 2 or (argc == 2 and std::string(argv[1]) == "-norebuild")))
+        if (CLFlags[CLArgument::Debug])
         {
-            std::cout << "Please enter arguments: ";
-            std::string temp; std::getline(std::cin, temp);
-            while (true)
-            {
-                size_t sp = temp.find(' ');
-                args.push_back(temp.substr(0, sp));
-                temp = temp.substr(sp);
-                if (sp == std::string::npos)
-                    break;
-            }
+            DefaultCompileCommand = DefaultCompileCommand + CompilerFlag::Debug;
+            DefaultLinkCommand = DefaultLinkCommand + LinkerFlag::Debug;
         }
-        else
-        {
-            for (int i = 1; i < argc; i++)
-            {
-                args.push_back(argv[i]);
-            }
-        }
-
-        for (int i = 0; i < args.size(); i++)
-        {
-            if (args[i] == "-norebuild")
-                continue;
-            else if (args[i] == "-debug")
-            {
-                DefaultCompileCommand = DefaultCompileCommand + CompilerFlag::Debug;
-                DefaultLinkCommand = DefaultLinkCommand + LinkerFlag::Debug;
-            }
-            else if (args[i] == "-silent")
-            {
-                IsSilent = true;
-            }
-            else
-            {
-                // Log("Argument not supported: " + args[i] + "\n", LogType::Info);
-            }
-        }
-
-        return args;
     }
 
     void Log(std::string s, LogType t)

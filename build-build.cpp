@@ -5,38 +5,22 @@
 
 int main(int argc, char** argv)
 {
-#ifdef NOBPP_INIT_SCRIPT
-    nob::Command cmd = nob::Command() + std::filesystem::path(NOBPP_INIT_SCRIPT);
-#else
-    // this functionality is required on msvc
-    #ifdef __nob_msvc__
-        #error
-    #endif
+    nob::Init(argc, argv, __FILE__);
 
-    nob::Command cmd;
-#endif
-
-    if (argc < 2)
+    for (std::string& str : nob::OtherCLArguments)
     {
-        std::cout << "No args...\n";
-    }
+        std::cout << str << "\n";
 
-    for (int i = 1; i < argc; i++)
-    {
-        std::cout << i << "\n";
-
-        std::filesystem::path file = { argv[i] };
-        cmd = cmd + (nob::CompileCommand()
+        std::filesystem::path file = { str };
+        (nob::CompileCommand()
          + nob::SourceFile{ file } + nob::CompilerFlag::CPPVersion17
+#ifdef NOBPP_INIT_SCRIPT
+         + nob::MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
+#endif
          + nob::IncludeDirectory{ std::filesystem::current_path() }
          + nob::AddLinkCommand{ nob::LinkCommand() }
-        );
+        ).Run();
     }
-
-    cmd.Run();
-
-    std::cout << "Press Enter to exit.";
-    std::getline(std::cin, std::string{});
 
     return 0;
 }
