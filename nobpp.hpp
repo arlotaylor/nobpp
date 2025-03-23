@@ -152,7 +152,12 @@ namespace nob
     extern std::bitset<CLArgument::Count> CLFlags;
     extern std::vector<std::string> OtherCLArguments;
 
-    void Init(int argc, char** argv, std::string srcName);
+    class Init
+    {
+    public:
+        Init(int argc, char** argv, std::string srcName);
+        ~Init();
+    };
 
     enum LogType
     {
@@ -222,20 +227,19 @@ namespace nob
 #else
             " >/dev/null"
 #endif            
-            : "") + (plainErrors ? "" : " 2>nob_error_log.txt")).c_str()
+            : "") + (plainErrors ? std::string("") : (" 2>" + (std::filesystem::current_path() / "nob_error_log.txt").string()))).c_str()
         );
 
         if (!plainErrors)
         {
             {
-                std::ifstream errorFile("nob_error_log.txt");
+                std::ifstream errorFile((std::filesystem::current_path() / "nob_error_log.txt"));
                 std::string temp;
                 while (std::getline(errorFile, temp))
                 {
                     Log(temp + "\n", LogType::Error);
                 }
             }
-            std::filesystem::remove("nob_error_log.txt");
         }
 
         Log("Done\n", LogType::Run);
@@ -848,7 +852,7 @@ namespace nob
         }
     }
 
-    void Init(int argc, char** argv, std::string srcName)
+    Init::Init(int argc, char** argv, std::string srcName)
     {
         if (argc < 1)
         {
@@ -915,6 +919,11 @@ namespace nob
             DefaultCompileCommand = DefaultCompileCommand + CompilerFlag::Debug;
             DefaultLinkCommand = DefaultLinkCommand + LinkerFlag::Debug;
         }
+    }
+
+    Init::~Init()
+    {
+        std::filesystem::remove(std::filesystem::current_path() / "nob_error_log.txt");
     }
 
     void Log(std::string s, LogType t)

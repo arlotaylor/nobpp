@@ -5,7 +5,7 @@
 
 int main(int argc, char** argv)
 {
-    nob::Init(argc, argv, __FILE__);
+    nob::Init nobInit(argc, argv, __FILE__);
 
     for (std::string& str : nob::OtherCLArguments)
     {
