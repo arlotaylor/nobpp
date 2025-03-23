@@ -57,7 +57,10 @@ namespace nob
         std::string text;
         std::filesystem::path path = std::filesystem::current_path();
 
-        void Run(bool suppressOutput = false);
+        float latestInput = 1.f;
+        float earliestOutput = FLT_MAX;
+
+        void Run(bool suppressOutput = false, bool plainErrors = false);
     };
 
     Command operator+(Command a, std::string b);
@@ -142,6 +145,7 @@ namespace nob
         NoInitScript,
         Debug,
         Silent,
+        Clean,
         Count,
     };
 
@@ -153,8 +157,9 @@ namespace nob
     enum LogType
     {
         None = -1,
-        Info = 0,
-        Run = 1,
+        Info,
+        Run,
+        Error,
     };
 
     void Log(std::string s, LogType t = LogType::None);
@@ -169,6 +174,7 @@ namespace nob
 #include <thread>
 #include <iostream>
 #include <string>
+#include <fstream>
 #include <ciso646>
 
 #if defined(__clang__)
@@ -189,8 +195,14 @@ namespace nob
 
 namespace nob
 {
-    void Command::Run(bool suppressOutput)
+    void Command::Run(bool suppressOutput, bool plainErrors)
     {
+        if (!CLFlags[CLArgument::Clean] and earliestOutput != FLT_MAX and latestInput < earliestOutput)
+        {
+            Log("Command skipped.\n", LogType::Run);
+            return;
+        }
+
         if (CLFlags[CLArgument::Silent])
         {
             suppressOutput = true;
@@ -203,25 +215,41 @@ namespace nob
             Log("\n");
         }
 
-        std::system(("\"" + text + "\"" + (suppressOutput ?
+        std::system(
+            ("\"" + text + "\"" + (suppressOutput ?
 #ifdef _WIN32
-            " >nul 2>nul"
+            " >nul"
 #else
-            " >/dev/null 2>/dev/null"
+            " >/dev/null"
 #endif            
-            : "")).c_str());
+            : "") + (plainErrors ? "" : " 2>nob_error_log.txt")).c_str()
+        );
 
-        Log("FINISHED\n", LogType::Run);
+        if (!plainErrors)
+        {
+            {
+                std::ifstream errorFile("nob_error_log.txt");
+                std::string temp;
+                while (std::getline(errorFile, temp))
+                {
+                    Log(temp + "\n", LogType::Error);
+                }
+            }
+            std::filesystem::remove("nob_error_log.txt");
+        }
+
+        Log("Done\n", LogType::Run);
+        
     }
 
     Command operator+(Command a, std::string b)
     {
-        return Command{ a.text == "" ? b : a.text + " " + b, a.path };
+        return Command{ a.text == "" ? b : a.text + " " + b, a.path, a.latestInput, a.earliestOutput };
     }
 
     Command operator-(Command a, std::string b)
     {
-        return Command{ a.text == "" ? b : a.text + b, a.path };
+        return Command{ a.text == "" ? b : a.text + b, a.path, a.latestInput, a.earliestOutput };
     }
 
     Command operator+(Command a, std::filesystem::path b)
@@ -397,6 +425,16 @@ namespace nob
 
     CompileCommand operator+(CompileCommand a, SourceFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.latestInput = max(a.latestInput, modified);
+        }
+        else
+        {
+            a.latestInput = FLT_MAX;
+        }
+
 #if defined(__nob_msvc__)
         return a + b.path;
 #elif defined(__nob_gcc__)
@@ -410,6 +448,16 @@ namespace nob
 
     CompileCommand operator+(CompileCommand a, ObjectFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.earliestOutput = min(a.earliestOutput, modified);
+        }
+        else
+        {
+            a.earliestOutput = 0.f;
+        }
+
 #if defined(__nob_msvc__)
         return a + std::string("-Fo") - b.path;
 #elif defined(__nob_gcc__)
@@ -570,6 +618,16 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, ObjectFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.latestInput = max(a.latestInput, modified);
+        }
+        else
+        {
+            a.latestInput = FLT_MAX;
+        }
+
 #if defined(__nob_msvc__)
         size_t pos = a.text.find("-link");
         a.text = a.text.substr(0, pos) + "\"" + b.path.string() + "\" " + a.text.substr(pos);
@@ -585,6 +643,12 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, StaticLibraryFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.latestInput = max(a.latestInput, modified);
+        }
+
         if (b.path.extension().string() == "a" or b.path.extension().string() == "lib")
         {
 #if defined(_WIN32)
@@ -595,13 +659,13 @@ namespace nob
         }
 
 #if defined(__nob_msvc__)
-        return a + std::string("-libpath:") - b.path.parent_path() + b.path;
+        return a + b.path;
 #elif defined(__nob_gcc__)
-        return a + std::string("-L") - b.path.parent_path() + b.path;
+        return a + b.path;
 #elif defined(__nob_clang__)
-        return a + std::string("-L") - b.path.parent_path() + b.path;
+        return a + b.path;
 #else
-        return a + std::string("-L") - b.path.parent_path() + b.path;
+        return a + b.path;
 #endif
     }
 
@@ -619,6 +683,16 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, ExecutableFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.earliestOutput = min(a.earliestOutput, modified);
+        }
+        else
+        {
+            a.earliestOutput = 0.f;
+        }
+
 #if defined(__nob_msvc__)
         return a + std::string("-out:") - b.path;
 #elif defined(__nob_gcc__)
@@ -662,11 +736,31 @@ namespace nob
 
     LibraryCommand operator+(LibraryCommand a, ObjectFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.latestInput = max(a.latestInput, modified);
+        }
+        else
+        {
+            a.latestInput = FLT_MAX;
+        }
+
         return a + b.path;
     }
 
     LibraryCommand operator+(LibraryCommand a, StaticLibraryFile b)
     {
+        if (std::filesystem::exists(b.path))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
+            a.earliestOutput = min(a.earliestOutput, modified);
+        }
+        else
+        {
+            a.earliestOutput = 0.f;
+        }
+
 #if defined(__nob_msvc__)
         return a + std::string("-out:") - b.path;
 #else
@@ -743,6 +837,10 @@ namespace nob
             {
                 CLFlags.set(CLArgument::Silent);
             }
+            else if (std::string(argv[i]) == "-clean")
+            {
+                CLFlags.set(CLArgument::Clean);
+            }
             else 
             {
                 OtherCLArguments.push_back(argv[i]);
@@ -773,7 +871,7 @@ namespace nob
             Command newBinCmd;
             newBinCmd = newBinCmd + binPath + std::string("-noinitscript");
             newBinCmd = AddArgs(newBinCmd, argc, argv);
-            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false);
+            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false, true);
             std::exit(0);
         }
 #endif
@@ -806,7 +904,7 @@ namespace nob
                 Command newBinCmd;
                 newBinCmd = newBinCmd + binPath + std::string("-norebuild");
                 newBinCmd = AddArgs(newBinCmd, argc, argv);
-                newBinCmd.Run(false);
+                newBinCmd.Run(false, true);
                 std::exit(0);
             }
         }
@@ -829,19 +927,32 @@ namespace nob
 
 #ifdef _WIN32
         HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (t == LogType::Info)
-            SetConsoleTextAttribute(console, 3);
-        else if (t == LogType::Run)
-            SetConsoleTextAttribute(console, 2);
+
+        int consoleCode = 15;
+        switch (t)
+        {
+        case LogType::Info: consoleCode = 3; break;
+        case LogType::Run: consoleCode = 8; break;
+        case LogType::Error: consoleCode = 4; break;
+        default:
+            break;
+        }
+
+        SetConsoleTextAttribute(console, consoleCode);
         std::cout << prefix + s;
         SetConsoleTextAttribute(console, 15);
 #else
-        if (t == LogType::Info)
-            std::cout << "\033[1;34m" + prefix + s + "\033[0m";
-        else if (t == LogType::Run)
-            std::cout << "\033[1;32m" + prefix + s + "\033[0m";
-        else
-            std::cout << prefix + s;
+        std::string consoleCode = "0";
+        switch (t)
+        {
+        case LogType::Info: consoleCode = "0;36"; break;
+        case LogType::Run: consoleCode = "1;30"; break;
+        case LogType::Error: consoleCode = "0;31"; break;
+        default:
+            break;
+        }
+
+        std::cout << "\033[" + consoleCode + "m" << prefix + s << "\033[0m";
 #endif
 
 #endif
