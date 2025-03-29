@@ -72,6 +72,8 @@ namespace nob
 
     template<typename T> void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync = true);
 
+    std::filesystem::path OpenFileDialog(std::filesystem::path startingFolder = std::filesystem::current_path(), bool isFolder = false);
+
     std::string AddEscapes(std::string inp);
     std::string RemoveEscapes(std::string inp);
 
@@ -174,7 +176,6 @@ namespace nob
 
 #endif
 
-#define NOBPP_IMPLEMENTATION  // delete this
 #ifdef NOBPP_IMPLEMENTATION
 // nobpp implementation
 
@@ -193,11 +194,12 @@ namespace nob
 #endif
 
 #if !defined(NOBPP_INIT_SCRIPT) && defined(__nob_msvc__)
-#error
+// #error  this is unnecessary if you don't want to run cl commands
 #endif
 
 #if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
 #include <Windows.h>  // for logging :(
+#include <shobjidl.h>  // for file dialog :(
 #endif
 
 namespace nob
@@ -300,6 +302,81 @@ namespace nob
                 fn(i);
             }
         }
+    }
+
+    std::filesystem::path OpenFileDialog(std::filesystem::path startingFolder, bool isFolder)
+    {
+#ifdef _WIN32
+    IFileOpenDialog *fileDialog = nullptr;
+    bool are_all_operation_success = false;
+    while (!are_all_operation_success)
+    {
+        if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, (void**)(&fileDialog))))
+            break;
+
+        if (isFolder)
+        {
+            FILEOPENDIALOGOPTIONS options = 0;
+            if (FAILED(fileDialog->GetOptions(&options)))
+                break;
+
+            options |= FOS_PICKFOLDERS;
+
+            if (FAILED(fileDialog->SetOptions(options)))
+                break;
+        }
+
+        HRESULT hr = fileDialog->Show(NULL);
+        if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) // No items were selected.
+        {
+            are_all_operation_success = true;
+            break;
+        }
+        else if (FAILED(hr))
+            break;
+
+        IShellItemArray *items;
+        if (FAILED(fileDialog->GetResults(&items)))
+            break;
+        
+        DWORD total_items = 0;
+        
+        if (FAILED(items->GetCount(&total_items)))
+            break;
+
+        if ((int)total_items != 1)
+        {
+            Log("Wrong number of items.", )
+            break;
+        }
+
+        for (int i = 0; i < (int)total_items; ++i)
+        {
+            IShellItem *p_item;
+            p_items->GetItemAt(i, &p_item);
+            if (SUCCEEDED(hr))
+            {
+                PWSTR path;
+                hr = p_item->GetDisplayName(SIGDN_FILESYSPATH, &path);
+                if (SUCCEEDED(hr))
+                {
+                    paths.push_back(path);
+                    CoTaskMemFree(path);
+                }
+                p_item->Release();
+            }
+        }
+
+        p_items->Release();
+        are_all_operation_success = true;
+    }
+
+    if (p_file_open)
+        p_file_open->Release();
+    
+#else
+        Log("not supported sorry\n");
+#endif
     }
 
 
