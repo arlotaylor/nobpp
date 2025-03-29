@@ -72,6 +72,8 @@ namespace nob
 
     template<typename T> void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync = true);
 
+    std::string AddEscapes(std::string inp);
+    std::string RemoveEscapes(std::string inp);
 
     struct CompileCommand : public Command
     {
