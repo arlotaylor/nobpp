@@ -72,7 +72,7 @@ namespace nob
 
     template<typename T> void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync = true);
 
-    std::filesystem::path OpenFileDialog(std::filesystem::path startingFolder = std::filesystem::current_path(), bool isFolder = false);
+    bool OpenFileDialog(std::filesystem::path& out, std::filesystem::path startingFolder = std::filesystem::current_path(), bool isFolder = false);
 
     std::string AddEscapes(std::string inp);
     std::string RemoveEscapes(std::string inp);
@@ -197,7 +197,13 @@ namespace nob
 // #error  this is unnecessary if you don't want to run cl commands
 #endif
 
+#if defined(NOBPP_STRIP_WINDOWS) && defined(_WIN32)
+#define NOBPP_WINDOWS_WAS_STRIPPED
+#undef _WIN32
+#endif
+
 #if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
+#define NOMINMAX
 #include <Windows.h>  // for logging :(
 #include <shobjidl.h>  // for file dialog :(
 #endif
@@ -304,78 +310,67 @@ namespace nob
         }
     }
 
-    std::filesystem::path OpenFileDialog(std::filesystem::path startingFolder, bool isFolder)
+    bool OpenFileDialog(std::filesystem::path& out, std::filesystem::path startingFolder, bool isFolder)
     {
 #ifdef _WIN32
-    IFileOpenDialog *fileDialog = nullptr;
-    bool are_all_operation_success = false;
-    while (!are_all_operation_success)
-    {
-        if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, (void**)(&fileDialog))))
-            break;
+#define BREAK_ON_FAIL(x) if (FAILED(x)) break
 
-        if (isFolder)
+        bool ret = false;
+
+        IFileOpenDialog *fileDialog = nullptr;
+        do
         {
-            FILEOPENDIALOGOPTIONS options = 0;
-            if (FAILED(fileDialog->GetOptions(&options)))
+            BREAK_ON_FAIL(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, (void**)(&fileDialog)));
+
+            if (isFolder)
+            {
+                FILEOPENDIALOGOPTIONS options = 0;
+                BREAK_ON_FAIL(fileDialog->GetOptions(&options));
+                options |= FOS_PICKFOLDERS;
+                BREAK_ON_FAIL(fileDialog->SetOptions(options));
+            }
+
+            HRESULT hr = fileDialog->Show(NULL);
+            if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) || FAILED(hr))
                 break;
 
-            options |= FOS_PICKFOLDERS;
+            IShellItemArray *items;
+            BREAK_ON_FAIL(fileDialog->GetResults(&items));
+            DWORD itemCount = 0;
+            BREAK_ON_FAIL(items->GetCount(&itemCount));
 
-            if (FAILED(fileDialog->SetOptions(options)))
+            if (itemCount != 1)
+            {
+                Log("Wrong number of items.", LogType::Error);
                 break;
-        }
+            }
 
-        HRESULT hr = fileDialog->Show(NULL);
-        if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) // No items were selected.
-        {
-            are_all_operation_success = true;
-            break;
-        }
-        else if (FAILED(hr))
-            break;
-
-        IShellItemArray *items;
-        if (FAILED(fileDialog->GetResults(&items)))
-            break;
-        
-        DWORD total_items = 0;
-        
-        if (FAILED(items->GetCount(&total_items)))
-            break;
-
-        if ((int)total_items != 1)
-        {
-            Log("Wrong number of items.", )
-            break;
-        }
-
-        for (int i = 0; i < (int)total_items; ++i)
-        {
-            IShellItem *p_item;
-            p_items->GetItemAt(i, &p_item);
-            if (SUCCEEDED(hr))
+            IShellItem *item;
+            if (SUCCEEDED(items->GetItemAt(0, &item)))
             {
                 PWSTR path;
-                hr = p_item->GetDisplayName(SIGDN_FILESYSPATH, &path);
-                if (SUCCEEDED(hr))
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
                 {
-                    paths.push_back(path);
+                    out = path;
+                    ret = true;
                     CoTaskMemFree(path);
                 }
-                p_item->Release();
+                item->Release();
             }
-        }
 
-        p_items->Release();
-        are_all_operation_success = true;
-    }
+            items->Release();
 
-    if (p_file_open)
-        p_file_open->Release();
-    
+        } while (false);
+
+        if (fileDialog)
+            fileDialog->Release();
+        
+        return ret;
+
+#undef BREAK_ON_FAIL
 #else
         Log("not supported sorry\n");
+        return {};
 #endif
     }
 
@@ -511,7 +506,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = max(a.latestInput, modified);
+            a.latestInput = std::max(a.latestInput, modified);
         }
         else
         {
@@ -534,7 +529,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = min(a.earliestOutput, modified);
+            a.earliestOutput = std::min(a.earliestOutput, modified);
         }
         else
         {
@@ -704,7 +699,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = max(a.latestInput, modified);
+            a.latestInput = std::max(a.latestInput, modified);
         }
         else
         {
@@ -729,7 +724,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = max(a.latestInput, modified);
+            a.latestInput = std::max(a.latestInput, modified);
         }
 
         if (b.path.extension().string() == "a" or b.path.extension().string() == "lib")
@@ -769,7 +764,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = min(a.earliestOutput, modified);
+            a.earliestOutput = std::min(a.earliestOutput, modified);
         }
         else
         {
@@ -822,7 +817,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = max(a.latestInput, modified);
+            a.latestInput = std::max(a.latestInput, modified);
         }
         else
         {
@@ -837,7 +832,7 @@ namespace nob
         if (std::filesystem::exists(b.path))
         {
             float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = min(a.earliestOutput, modified);
+            a.earliestOutput = std::min(a.earliestOutput, modified);
         }
         else
         {
@@ -982,7 +977,12 @@ namespace nob
 #ifdef NOBPP_INIT_SCRIPT
                 + MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
 #endif
-                + AddLinkCommand{LinkCommand() + ExecutableFile{binPath}}).Run();
+                + AddLinkCommand{LinkCommand()
+#ifdef _WIN32
+                    + StaticLibraryFile{ "ole32.lib" }
+#endif
+                    
+                    + ExecutableFile{binPath}}).Run();
 
                 Command newBinCmd;
                 newBinCmd = newBinCmd + binPath + std::string("-norebuild");
@@ -1046,5 +1046,10 @@ namespace nob
 #endif
     }
 }
+
+#ifdef NOBPP_WINDOWS_WAS_STRIPPED
+#define _WIN32
+#undef NOBPP_WINDOWS_WAS_STRIPPED
+#endif
 
 #endif
