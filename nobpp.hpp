@@ -60,7 +60,7 @@ namespace nob
         float latestInput = 1.f;
         float earliestOutput = FLT_MAX;
 
-        void Run(bool suppressOutput = false, bool plainErrors = false);
+        int Run(bool suppressOutput = false, bool plainErrors = false);
     };
 
     Command operator+(Command a, std::string b);
@@ -210,12 +210,12 @@ namespace nob
 
 namespace nob
 {
-    void Command::Run(bool suppressOutput, bool plainErrors)
+    int Command::Run(bool suppressOutput, bool plainErrors)
     {
         if (!CLFlags[CLArgument::Clean] and earliestOutput != FLT_MAX and latestInput < earliestOutput)
         {
             Log("Command skipped.\n", LogType::Run);
-            return;
+            return 0;
         }
 
         if (CLFlags[CLArgument::Silent])
@@ -230,7 +230,7 @@ namespace nob
             Log("\n");
         }
 
-        std::system(
+        int ret = std::system(
             ("\"" + text + "\"" + (suppressOutput ?
 #ifdef _WIN32
             " >nul"
@@ -254,6 +254,7 @@ namespace nob
 
         Log("Done\n", LogType::Run);
         
+        return ret;
     }
 
     Command operator+(Command a, std::string b)
