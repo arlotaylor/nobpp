@@ -61,6 +61,8 @@ namespace nob
         float earliestOutput = FLT_MAX;
 
         int Run(bool suppressOutput = false, bool plainErrors = false);
+        void UpdateInputTime(std::filesystem::path file, bool skipOnFail = false);
+        void UpdateOutputTime(std::filesystem::path file, bool skipOnFail = false);
     };
 
     Command operator+(Command a, std::string b);
@@ -99,6 +101,22 @@ namespace nob
     struct ObjectFile { std::filesystem::path path; };
     struct IncludeDirectory { std::filesystem::path path; };
     struct MacroDefinition { std::string macro; std::string definition; };
+    
+    struct PrecompiledHeader;
+
+    PrecompiledHeader CreatePrecompiledHeader(CompileCommand cmd, std::filesystem::path header, std::filesystem::path pch);
+    PrecompiledHeader UsePrecompiledHeader(std::filesystem::path header, std::filesystem::path pch);
+    
+    struct PrecompiledHeader
+    {
+    private:
+        friend PrecompiledHeader CreatePrecompiledHeader(CompileCommand cmd, std::filesystem::path header, std::filesystem::path pch);
+        friend PrecompiledHeader UsePrecompiledHeader(std::filesystem::path header, std::filesystem::path pch);
+        PrecompiledHeader(std::filesystem::path headerp, std::filesystem::path pchp);
+    public:
+        std::filesystem::path header;
+        std::filesystem::path pch;
+    };
 
     struct StaticLibraryFile { std::filesystem::path path; };  // is either .lib or .a
     struct DynamicLibraryFile { std::filesystem::path path; };  // is either .dll, .so or .dylib
@@ -123,6 +141,7 @@ namespace nob
     CompileCommand operator+(CompileCommand a, ObjectFile b);
     CompileCommand operator+(CompileCommand a, IncludeDirectory b);
     CompileCommand operator+(CompileCommand a, MacroDefinition b);
+    CompileCommand operator+(CompileCommand a, PrecompiledHeader b);
     CompileCommand operator+(CompileCommand a, CompilerFlag b);
     CompileCommand operator+(CompileCommand a, CustomCompilerFlag b);
     CompileCommand operator+(CompileCommand a, AddLinkCommand b);
@@ -175,6 +194,7 @@ namespace nob
 }
 
 #endif
+
 
 #ifdef NOBPP_IMPLEMENTATION
 // nobpp implementation
@@ -255,6 +275,32 @@ namespace nob
         Log("Done\n", LogType::Run);
         
         return ret;
+    }
+
+    void Command::UpdateInputTime(std::filesystem::path file, bool skipOnFail)
+    {
+        if (std::filesystem::exists(file))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(file).time_since_epoch()).count();
+            latestInput = std::max(latestInput, modified);
+        }
+        else if (!skipOnFail)
+        {
+            latestInput = FLT_MAX;
+        }
+    }
+
+    void Command::UpdateOutputTime(std::filesystem::path file, bool skipOnFail)
+    {
+        if (std::filesystem::exists(file))
+        {
+            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(file).time_since_epoch()).count();
+            earliestOutput = std::min(earliestOutput, modified);
+        }
+        else if (!skipOnFail)
+        {
+            earliestOutput = 0.f;
+        }
     }
 
     Command operator+(Command a, std::string b)
@@ -502,17 +548,41 @@ namespace nob
     }
 
 
+    PrecompiledHeader CreatePrecompiledHeader(CompileCommand cmd, std::filesystem::path header, std::filesystem::path pch)
+    {
+        cmd.UpdateInputTime(header);
+        cmd.UpdateOutputTime(pch);
+
+        (cmd + IncludeDirectory{ header.parent_path() }
+#if defined(__nob_msvc__)
+            + std::string("-Yc") - header.filename() + std::string("-Fp") - pch
+#elif defined(__nob_gcc__)
+
+#elif defined(__nob_clang__)
+
+#else
+
+#endif
+        ).Run();
+        return PrecompiledHeader(header, pch);
+    }
+
+    PrecompiledHeader UsePrecompiledHeader(std::filesystem::path header, std::filesystem::path pch)
+    {
+        return PrecompiledHeader(header, pch);
+    }
+
+
+    PrecompiledHeader::PrecompiledHeader(std::filesystem::path headerp, std::filesystem::path pchp)
+        : header(headerp), pch(pchp)
+    {
+    }
+
+
+
     CompileCommand operator+(CompileCommand a, SourceFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = std::max(a.latestInput, modified);
-        }
-        else
-        {
-            a.latestInput = FLT_MAX;
-        }
+        a.UpdateInputTime(b.path);
 
 #if defined(__nob_msvc__)
         return a + b.path;
@@ -527,15 +597,7 @@ namespace nob
 
     CompileCommand operator+(CompileCommand a, ObjectFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = std::min(a.earliestOutput, modified);
-        }
-        else
-        {
-            a.earliestOutput = 0.f;
-        }
+        a.UpdateOutputTime(b.path);
 
 #if defined(__nob_msvc__)
         return a + std::string("-Fo") - b.path;
@@ -571,6 +633,22 @@ namespace nob
         return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
 #else
         return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
+#endif
+    }
+
+    CompileCommand operator+(CompileCommand a, PrecompiledHeader b)
+    {
+        a.UpdateInputTime(b.header);
+        a.UpdateInputTime(b.pch);
+
+#if defined(__nob_msvc__)
+        return a + IncludeDirectory{ b.header.parent_path() } + std::string("-Yu") - b.header.filename()  + std::string("-Fp") - b.pch;
+#elif defined(__nob_gcc__)
+        return a;
+#elif defined(__nob_clang__)
+        return a;
+#else
+        return a;
 #endif
     }
 
@@ -697,15 +775,7 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, ObjectFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = std::max(a.latestInput, modified);
-        }
-        else
-        {
-            a.latestInput = FLT_MAX;
-        }
+        a.UpdateInputTime(b.path);
 
 #if defined(__nob_msvc__)
         size_t pos = a.text.find("-link");
@@ -722,11 +792,7 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, StaticLibraryFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = std::max(a.latestInput, modified);
-        }
+        a.UpdateInputTime(b.path, true);
 
         if (b.path.extension().string() == "a" or b.path.extension().string() == "lib")
         {
@@ -762,15 +828,7 @@ namespace nob
 
     LinkCommand operator+(LinkCommand a, ExecutableFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = std::min(a.earliestOutput, modified);
-        }
-        else
-        {
-            a.earliestOutput = 0.f;
-        }
+        a.UpdateOutputTime(b.path);
 
 #if defined(__nob_msvc__)
         return a + std::string("-out:") - b.path;
@@ -815,30 +873,14 @@ namespace nob
 
     LibraryCommand operator+(LibraryCommand a, ObjectFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.latestInput = std::max(a.latestInput, modified);
-        }
-        else
-        {
-            a.latestInput = FLT_MAX;
-        }
+        a.UpdateInputTime(b.path);
 
         return a + b.path;
     }
 
     LibraryCommand operator+(LibraryCommand a, StaticLibraryFile b)
     {
-        if (std::filesystem::exists(b.path))
-        {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(b.path).time_since_epoch()).count();
-            a.earliestOutput = std::min(a.earliestOutput, modified);
-        }
-        else
-        {
-            a.earliestOutput = 0.f;
-        }
+        a.UpdateOutputTime(b.path);
 
 #if defined(__nob_msvc__)
         return a + std::string("-out:") - b.path;
