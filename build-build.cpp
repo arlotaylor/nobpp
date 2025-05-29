@@ -7,6 +7,8 @@ int main(int argc, char** argv)
 {
     nob::Init nobInit(argc, argv, __FILE__);
 
+    std::cout << "Compiling build file(s).\n";
+
     for (std::string& str : nob::OtherCLArguments)
     {
         std::cout << str << "\n";
@@ -22,7 +24,8 @@ int main(int argc, char** argv)
         ).Run();
     }
 
-    // std::getline(std::cin, std::string());
+    std::cout << "Done! (press enter)";
+    std::getline(std::cin, std::string());
 
     return 0;
 }

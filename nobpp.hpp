@@ -79,6 +79,7 @@ namespace nob
     std::string AddEscapes(std::string inp);
     std::string RemoveEscapes(std::string inp);
 
+  #ifndef NOBPP_NO_COMPILER
     struct CompileCommand : public Command
     {
         CompileCommand(std::filesystem::path path = std::filesystem::current_path());
@@ -161,11 +162,13 @@ namespace nob
 
     void CompileDirectory(std::filesystem::path src, std::filesystem::path obj, CompileCommand cmd = DefaultCompileCommand, bool runAsync = false);
     void LinkDirectory(std::filesystem::path obj, std::filesystem::path exe, LinkCommand cmd = DefaultLinkCommand);
+  #endif
 
     enum CLArgument
     {
         NoRebuild = 0,
         NoInitScript,
+        Configure,
         Debug,
         Silent,
         Clean,
@@ -191,6 +194,8 @@ namespace nob
     };
 
     void Log(std::string s, LogType t = LogType::None);
+
+    
 }
 
 #endif
@@ -205,31 +210,75 @@ namespace nob
 #include <fstream>
 #include <ciso646>
 
+// ------------------------------ MACRO DEFINITIONS ----------------------------------
 #if defined(__clang__)
-#define __nob_clang__
+  #define __nob_clang__
 #elif defined(_MSC_VER)
-#define __nob_msvc__
+  #define __nob_msvc__
 #elif defined(__GNUC__)
-#define __nob_gcc__
+  #define __nob_gcc__
 #endif
 
-#if !defined(NOBPP_INIT_SCRIPT) && defined(__nob_msvc__)
-// #error  this is unnecessary if you don't want to run cl commands
+
+#ifdef NOBPP_CONFIGURED
+
+  #if !defined(NOBPP_COMPILER_NAME) \
+   || !defined(NOBPP_EXTRA_DEFAULT_COMPILER_ARGS) \
+   || !defined(NOBPP_EXTRA_DEFAULT_LINKER_ARGS) \
+   || !defined(NOBPP_UI_MODE) \
+   || !defined(NOBPP_FILE_DIALOG_MODE) \
+   || !defined(NOBPP_MINIMUM_LOG_LEVEL) \
+   || !defined(NOBPP_SUMMARY_MODE) \
+   || !defined(NOBPP_RECOMPILE_MODE) \
+   || !defined(NOBPP_INIT_SCRIPT)
+    #error  // poorly defined configuration
+  #else
+    #if (NOBPP_UI_MODE != 0 && NOBPP_UI_MODE != 1) \  // basic, pretty
+     || (NOBPP_MINIMUM_LOG_LEVEL != 0 && NOBPP_MINIMUM_LOG_LEVEL != 1 && NOBPP_MINIMUM_LOG_LEVEL != 2 && NOBPP_MINIMUM_LOG_LEVEL != 3) \  // trace, info, error, none
+     || (NOBPP_SUMMARY_MODE != 0 && NOBPP_SUMMARY_MODE != 1) \  // no, yes
+     || (NOBPP_RECOMPILE_MODE != 0 && NOBPP_RECOMPILE_MODE != 1 && NOBPP_RECOMPILE_MODE != 2) \  // auto, ask, never
+     || (NOBPP_FILE_DIALOG_MODE != 0 && NOBPP_FILE_DIALOG_MODE != 1 && NOBPP_FILE_DIALOG_MODE != 2) \  // command line, pretty command line, os-specific
+      #error  // invalid macros
+    #endif
+
+    #if NOBPP_FILE_DIALOG_MODE == 1 && NOBPP_UI_MODE != 1
+      #error  // pretty file dialogs are not supported in basic mode
+    #endif
+  #endif
+#else
+
+  #if defined(__nob_msvc__)
+    #define NOBPP_COMPILER_NAME "cl"
+  #elif defined(__nob_clang__)
+    #define NOBPP_COMPILER_NAME "clang++"
+  #elif defined(__nob_gcc__)
+    #define NOBPP_COMPILER_NAME "g++"
+  #else
+    #define NOBPP_COMPILER_NAME ""
+  #endif
+
+  #define NOBPP_EXTRA_DEFAULT_COMPILER_ARGS ""
+  #define NOBPP_EXTRA_DEFAULT_LINKER_ARGS ""
+  #define NOBPP_UI_MODE 0
+  #define NOBPP_FILE_DIALOG_MODE 0
+  #define NOBPP_MINIMUM_LOG_LEVEL 0
+  #define NOBPP_SUMMARY_MODE 0
+  #define NOBPP_RECOMPILE_MODE 1
+  #define NOBPP_INIT_SCRIPT ""
 #endif
 
-#if defined(NOBPP_STRIP_WINDOWS) && defined(_WIN32)
-#define NOBPP_WINDOWS_WAS_STRIPPED
-#undef _WIN32
-#endif
-
+// TODO: change this?
 #if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
 #define NOMINMAX
 #include <Windows.h>  // for logging :(
 #include <shobjidl.h>  // for file dialog :(
 #endif
 
+// --------------------------- NOBPP CORE ---------------------------
 namespace nob
 {
+// --------------------------- BASIC COMMAND -----------------------------
+
     int Command::Run(bool suppressOutput, bool plainErrors)
     {
         if (!CLFlags[CLArgument::Clean] and earliestOutput != FLT_MAX and latestInput < earliestOutput)
@@ -252,11 +301,11 @@ namespace nob
 
         int ret = std::system(
             ("\"" + text + "\"" + (suppressOutput ?
-#ifdef _WIN32
+        #ifdef _WIN32
             " >nul"
-#else
+        #else
             " >/dev/null"
-#endif            
+        #endif            
             : "") + (plainErrors ? std::string("") : (" 2>" + (std::filesystem::current_path() / "nob_error_log.txt").string()))).c_str()
         );
 
@@ -333,6 +382,9 @@ namespace nob
         return a + b.text;
     }
 
+
+// ------------------------ CORE HELPER FUNCTIONS -------------------------
+
     template<typename T>
     void ParallelForEach(std::vector<T> vec, std::function<void(T)> fn, bool runAsync)
     {
@@ -356,71 +408,6 @@ namespace nob
             }
         }
     }
-
-    bool OpenFileDialog(std::filesystem::path& out, std::filesystem::path startingFolder, bool isFolder)
-    {
-#ifdef _WIN32
-#define BREAK_ON_FAIL(x) if (FAILED(x)) break
-
-        bool ret = false;
-
-        IFileOpenDialog *fileDialog = nullptr;
-        do
-        {
-            BREAK_ON_FAIL(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, (void**)(&fileDialog)));
-
-            if (isFolder)
-            {
-                FILEOPENDIALOGOPTIONS options = 0;
-                BREAK_ON_FAIL(fileDialog->GetOptions(&options));
-                options |= FOS_PICKFOLDERS;
-                BREAK_ON_FAIL(fileDialog->SetOptions(options));
-            }
-
-            HRESULT hr = fileDialog->Show(NULL);
-            if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) || FAILED(hr))
-                break;
-
-            IShellItemArray *items;
-            BREAK_ON_FAIL(fileDialog->GetResults(&items));
-            DWORD itemCount = 0;
-            BREAK_ON_FAIL(items->GetCount(&itemCount));
-
-            if (itemCount != 1)
-            {
-                Log("Wrong number of items.", LogType::Error);
-                break;
-            }
-
-            IShellItem *item;
-            if (SUCCEEDED(items->GetItemAt(0, &item)))
-            {
-                PWSTR path;
-                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
-                {
-                    out = path;
-                    ret = true;
-                    CoTaskMemFree(path);
-                }
-                item->Release();
-            }
-
-            items->Release();
-
-        } while (false);
-
-        if (fileDialog)
-            fileDialog->Release();
-        
-        return ret;
-
-#undef BREAK_ON_FAIL
-#else
-        Log("not supported sorry\n");
-        return {};
-#endif
-    }
-
 
     std::string AddEscapes(std::string inp)
     {
@@ -478,6 +465,74 @@ namespace nob
         return ret;
     }
 
+
+// ------------------------ UI HELPER FUNCTIONS -------------------------
+
+    bool OpenFileDialog(std::filesystem::path& out, std::filesystem::path startingFolder, bool isFolder)
+    {
+      #ifdef _WIN32
+        #define BREAK_ON_FAIL(x) if (FAILED(x)) break
+
+        bool ret = false;
+
+        IFileOpenDialog *fileDialog = nullptr;
+        do
+        {
+            BREAK_ON_FAIL(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, (void**)(&fileDialog)));
+
+            if (isFolder)
+            {
+                FILEOPENDIALOGOPTIONS options = 0;
+                BREAK_ON_FAIL(fileDialog->GetOptions(&options));
+                options |= FOS_PICKFOLDERS;
+                BREAK_ON_FAIL(fileDialog->SetOptions(options));
+            }
+
+            HRESULT hr = fileDialog->Show(NULL);
+            if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) || FAILED(hr))
+                break;
+
+            IShellItemArray *items;
+            BREAK_ON_FAIL(fileDialog->GetResults(&items));
+            DWORD itemCount = 0;
+            BREAK_ON_FAIL(items->GetCount(&itemCount));
+
+            if (itemCount != 1)
+            {
+                Log("Wrong number of items.", LogType::Error);
+                break;
+            }
+
+            IShellItem *item;
+            if (SUCCEEDED(items->GetItemAt(0, &item)))
+            {
+                PWSTR path;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+                {
+                    out = path;
+                    ret = true;
+                    CoTaskMemFree(path);
+                }
+                item->Release();
+            }
+
+            items->Release();
+
+        } while (false);
+
+        if (fileDialog)
+            fileDialog->Release();
+        
+        return ret;
+
+        #undef BREAK_ON_FAIL
+      #else
+        Log("not supported sorry\n");
+        return {};
+      #endif
+    }
+
+// ------------------------ COMPILE COMMANDS -------------------------
 
     CompileCommand::CompileCommand(std::filesystem::path path)
         : Command({
