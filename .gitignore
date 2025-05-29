@@ -8,3 +8,5 @@
 *.vcxproj.user
 *.sln
 .vs/
+compile_flags.txt
+

@@ -79,7 +79,6 @@ namespace nob
     std::string AddEscapes(std::string inp);
     std::string RemoveEscapes(std::string inp);
 
-  #ifndef NOBPP_NO_COMPILER
     struct CompileCommand : public Command
     {
         CompileCommand(std::filesystem::path path = std::filesystem::current_path());
@@ -102,12 +101,12 @@ namespace nob
     struct ObjectFile { std::filesystem::path path; };
     struct IncludeDirectory { std::filesystem::path path; };
     struct MacroDefinition { std::string macro; std::string definition; };
-    
+
     struct PrecompiledHeader;
 
     PrecompiledHeader CreatePrecompiledHeader(CompileCommand cmd, std::filesystem::path header, std::filesystem::path pch);
     PrecompiledHeader UsePrecompiledHeader(std::filesystem::path header, std::filesystem::path pch);
-    
+
     struct PrecompiledHeader
     {
     private:
@@ -162,7 +161,6 @@ namespace nob
 
     void CompileDirectory(std::filesystem::path src, std::filesystem::path obj, CompileCommand cmd = DefaultCompileCommand, bool runAsync = false);
     void LinkDirectory(std::filesystem::path obj, std::filesystem::path exe, LinkCommand cmd = DefaultLinkCommand);
-  #endif
 
     enum CLArgument
     {
@@ -177,6 +175,7 @@ namespace nob
 
     extern std::bitset<CLArgument::Count> CLFlags;
     extern std::vector<std::string> OtherCLArguments;
+    extern std::filesystem::path ThisExecutablePath;
 
     class Init
     {
@@ -195,12 +194,32 @@ namespace nob
 
     void Log(std::string s, LogType t = LogType::None);
 
-    
+    struct ConfigurationFile
+    {
+        std::filesystem::path file;
+        std::string compilerName;
+        std::string extraCompilerDefaults;
+        std::string extraLinkerDefaults;
+        enum class ConfigUIMode { Basic, Fancy } uiMode;
+        enum class ConfigFileDialogMode { BasicCL, FancyCL, OSCall } fileDialogMode;
+        LogType minimumLogLevel;
+        bool IsSummaryMode;
+        enum class ConfigRecompileMode { Always, Ask, Never } recompileMode;
+        std::string initScript;
+    };
+
+    bool FindConfigFile(std::filesystem::path& fileOut);
+    ConfigurationFile LoadConfigFile(std::filesystem::path file);
+    void SaveConfigFile(std::filesystem::path file, ConfigurationFile config);
+
+    int AskMultipleChoiceQuestion(std::string question, std::string info, std::vector<std::string> answers, int defaultVal);
+    std::string AskShortAnswerQuestion(std::string question, std::string info);
 }
 
 #endif
 
 
+#define NOBPP_IMPLEMENTATION
 #ifdef NOBPP_IMPLEMENTATION
 // nobpp implementation
 
@@ -234,7 +253,7 @@ namespace nob
     #error  // poorly defined configuration
   #else
     #if (NOBPP_UI_MODE != 0 && NOBPP_UI_MODE != 1) \  // basic, pretty
-     || (NOBPP_MINIMUM_LOG_LEVEL != 0 && NOBPP_MINIMUM_LOG_LEVEL != 1 && NOBPP_MINIMUM_LOG_LEVEL != 2 && NOBPP_MINIMUM_LOG_LEVEL != 3) \  // trace, info, error, none
+     || (NOBPP_MINIMUM_LOG_LEVEL != 0 && NOBPP_MINIMUM_LOG_LEVEL != 1 && NOBPP_MINIMUM_LOG_LEVEL != 2 && NOBPP_MINIMUM_LOG_LEVEL != -1) \  // trace, info, error, none
      || (NOBPP_SUMMARY_MODE != 0 && NOBPP_SUMMARY_MODE != 1) \  // no, yes
      || (NOBPP_RECOMPILE_MODE != 0 && NOBPP_RECOMPILE_MODE != 1 && NOBPP_RECOMPILE_MODE != 2) \  // auto, ask, never
      || (NOBPP_FILE_DIALOG_MODE != 0 && NOBPP_FILE_DIALOG_MODE != 1 && NOBPP_FILE_DIALOG_MODE != 2) \  // command line, pretty command line, os-specific
@@ -981,6 +1000,8 @@ namespace nob
     LinkCommand DefaultLinkCommand = {};
     std::bitset<CLArgument::Count> CLFlags;
     std::vector<std::string> OtherCLArguments;
+    std::filesystem::path ThisExecutablePath;
+
 
     Command AddArgs(Command cmd, int argc, char** argv)
     {
@@ -991,10 +1012,11 @@ namespace nob
         return cmd;
     }
 
-    
+
 
     void ConsumeFlags(int argc, char** argv)
     {
+        ThisExecutablePath = std::filesystem::path{ argv[0] };
         for (int i = 1; i < argc; i++)
         {
             if (std::string(argv[i]) == "-norebuild")
@@ -1023,6 +1045,53 @@ namespace nob
             }
         }
     }
+
+
+
+
+    bool FindConfigFile(std::filesystem::path& fileOut)
+    {
+        for (auto& i : std::filesystem::directory_iterator(ThisExecutablePath.parent_path()))
+        {
+            if (i.is_regular_file() && i.path().filename() == ".nobppconfig")
+            {
+                fileOut = i.path();
+                return true;
+            }
+        }
+
+        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{
+            "%localappdata%"
+        } / "nobpp"))
+        {
+            if (i.is_regular_file() && i.path().filename() == ".nobppconfig")
+            {
+                fileOut = i.path();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    ConfigurationFile LoadConfigFile(std::filesystem::path file)
+    {
+    }
+
+    void SaveConfigFile(std::filesystem::path file, ConfigurationFile config)
+    {
+    }
+
+    int AskMultipleChoiceQuestion(std::string question, std::string info, std::vector<std::string> answers, int defaultVal)
+    {
+    }
+
+    std::string AskShortAnswerQuestion(std::string question, std::string info)
+    {
+    }
+
+
+
 
     Init::Init(int argc, char** argv, std::string srcName)
     {
