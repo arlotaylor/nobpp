@@ -197,15 +197,27 @@ namespace nob
     struct ConfigurationFile
     {
         std::filesystem::path file;
-        std::string compilerName;
-        std::string extraCompilerDefaults;
-        std::string extraLinkerDefaults;
-        enum class ConfigUIMode { Basic, Fancy } uiMode;
-        enum class ConfigFileDialogMode { BasicCL, FancyCL, OSCall } fileDialogMode;
-        LogType minimumLogLevel;
-        bool IsSummaryMode;
-        enum class ConfigRecompileMode { Always, Ask, Never } recompileMode;
-        std::string initScript;
+        std::string compilerName =
+        #if defined(__nob_msvc__)
+            "cl"
+        #elif defined(__nob_clang__)
+            "clang++"
+        #elif defined(__nob_gcc__)
+            "g++"
+        #endif
+        ;
+
+        std::string extraCompilerDefaults = "";
+        std::string extraLinkerDefaults = "";
+        enum class ConfigUIMode { Basic, Fancy } uiMode = ConfigurationFile::ConfigUIMode::Basic;
+        enum class ConfigFileDialogMode { BasicCL, FancyCL, OSCall } fileDialogMode = ConfigurationFile::ConfigFileDialogMode::BasicCL;
+        LogType minimumLogLevel = LogType::Info;
+        bool IsSummaryMode = false;
+        enum class ConfigRecompileMode { Always, Ask, Never } recompileMode = ConfigurationFile::ConfigRecompileMode::Always;
+        std::string initScript = "";
+
+        CompileCommand GetCommand();
+        static ConfigurationFile GetDefaultConfig();
     };
 
     bool FindConfigFile(std::filesystem::path& fileOut);
@@ -213,7 +225,9 @@ namespace nob
     void SaveConfigFile(std::filesystem::path file, ConfigurationFile config);
 
     int AskMultipleChoiceQuestion(std::string question, std::string info, std::vector<std::string> answers, int defaultVal);
-    std::string AskShortAnswerQuestion(std::string question, std::string info);
+    std::string AskShortAnswerQuestion(std::string question);
+
+    ConfigurationFile GenerateConfigFile();
 }
 
 #endif
@@ -228,6 +242,7 @@ namespace nob
 #include <string>
 #include <fstream>
 #include <ciso646>
+#include <cstdlib>
 
 // ------------------------------ MACRO DEFINITIONS ----------------------------------
 #if defined(__clang__)
@@ -325,13 +340,13 @@ namespace nob
         #else
             " >/dev/null"
         #endif            
-            : "") + (plainErrors ? std::string("") : (" 2>" + (std::filesystem::current_path() / "nob_error_log.txt").string()))).c_str()
+            : "") + (plainErrors ? std::string("") : (" 2>" + (std::filesystem::temp_directory_path() / "nob_error_log.txt").string()))).c_str()
         );
 
         if (!plainErrors)
         {
             {
-                std::ifstream errorFile((std::filesystem::current_path() / "nob_error_log.txt"));
+                std::ifstream errorFile((std::filesystem::temp_directory_path() / "nob_error_log.txt"));
                 std::string temp;
                 while (std::getline(errorFile, temp))
                 {
@@ -1046,8 +1061,25 @@ namespace nob
         }
     }
 
-
-
+    ConfigurationFile ConfigurationFile::GetDefaultConfig()
+    {
+        return ConfigurationFile{
+        #ifdef NOBPP_CONFIGURED
+            { NOBPP_CONFIGURED },
+        #else
+            { "" },
+        #endif
+            NOBPP_COMPILER_NAME,
+            NOBPP_EXTRA_DEFAULT_COMPILER_ARGS,
+            NOBPP_EXTRA_DEFAULT_LINKER_ARGS,
+            (ConfigurationFile::ConfigUIMode)NOBPP_UI_MODE,
+            (ConfigurationFile::ConfigFileDialogMode)NOBPP_FILE_DIALOG_MODE,
+            (LogType)NOBPP_MINIMUM_LOG_LEVEL,
+            NOBPP_SUMMARY_MODE == 1,
+            (ConfigurationFile::ConfigRecompileMode)NOBPP_RECOMPILE_MODE,
+            NOBPP_INIT_SCRIPT            
+        };
+    }
 
     bool FindConfigFile(std::filesystem::path& fileOut)
     {
@@ -1060,9 +1092,17 @@ namespace nob
             }
         }
 
-        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{
-            "%localappdata%"
-        } / "nobpp"))
+      #ifdef _WIN32
+        const char* appdata = std::getenv("LOCALAPPDATA");
+        if (appdata == nullptr) return false;
+
+        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{ appdata } / "nobpp"))
+      #else
+        const char* homepath = std::getenv("HOME");
+        if (homepath == nullptr) return false;
+
+        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{ homepath }))
+      #endif
         {
             if (i.is_regular_file() && i.path().filename() == ".nobppconfig")
             {
@@ -1076,21 +1116,118 @@ namespace nob
 
     ConfigurationFile LoadConfigFile(std::filesystem::path file)
     {
+        std::ifstream configFile(file);
+        ConfigurationFile config;
+        config.file = file;
+        std::string temp;
+        if (!std::getline(configFile, temp)) return config;
+        config.compilerName = temp;
+        if (!std::getline(configFile, temp)) return config;
+        config.extraCompilerDefaults = temp;
+        if (!std::getline(configFile, temp)) return config;
+        config.extraLinkerDefaults = temp;
+        if (!std::getline(configFile, temp)) return config;
+        config.uiMode = (ConfigurationFile::ConfigUIMode)std::stoi(temp);
+        if (!std::getline(configFile, temp)) return config;
+        config.fileDialogMode = (ConfigurationFile::ConfigFileDialogMode)std::stoi(temp);
+        if (!std::getline(configFile, temp)) return config;
+        config.minimumLogLevel = (LogType)std::stoi(temp);
+        if (!std::getline(configFile, temp)) return config;
+        config.IsSummaryMode = temp == "1";
+        if (!std::getline(configFile, temp)) return config;
+        config.recompileMode = (ConfigurationFile::ConfigRecompileMode)std::stoi(temp);
+        if (!std::getline(configFile, temp)) return config;
+        config.initScript = temp;
+        
+        return config;
     }
 
     void SaveConfigFile(std::filesystem::path file, ConfigurationFile config)
     {
+        std::ofstream fileOut(file);
+        fileOut << config.compilerName << "\n" << config.extraCompilerDefaults << "\n" << config.extraLinkerDefaults << "\n"
+        << (int)config.uiMode << "\n" << (int)config.fileDialogMode << "\n" << (int)config.minimumLogLevel << "\n"
+        << (config.IsSummaryMode ? 1 : 0) << "\n" << (int)config.recompileMode << "\n" << config.initScript << "\n";
     }
 
     int AskMultipleChoiceQuestion(std::string question, std::string info, std::vector<std::string> answers, int defaultVal)
     {
+        std::cout << question << "\n";
+        for (int i = 0; i < answers.size(); i++)
+        {
+            if (i == defaultVal) std::cout << "(default) ";
+            std::cout << i << ": " << answers[i] << "  ";
+        }
+        std::cout << "\n> ";
+
+        std::string preout; std::getline(std::cin, preout);
+        std::string out = "";
+        for (char c : preout)
+        {
+            if (std::isalpha(c)) out += std::tolower(c);
+            else out += c;
+        }
+
+        if (out == "") return defaultVal;
+        else if (std::isdigit(out[0]))
+        {
+            int numOut = std::stoi(out);
+            if (numOut >= 0 && numOut < answers.size()) return numOut;
+        }
+        else if (out == "i" || out == "info" || out == "?")
+        {
+            std::cout << "More Info: " << info << "\n";
+            return AskMultipleChoiceQuestion(question, info, answers, defaultVal);
+        }
+        else if (out == "back" || out == "prev" || out == "previous")
+        {
+            return -1;
+        }
+
+        std::cout << "Unrecognized input. Try again.\n";
+        return AskMultipleChoiceQuestion(question, info, answers, defaultVal);
     }
 
-    std::string AskShortAnswerQuestion(std::string question, std::string info)
+    std::string AskShortAnswerQuestion(std::string question)
     {
+        std::cout << question << "\n> ";
+        std::string ret; std::getline(std::cin, ret);
+        return ret;
     }
 
+    CompileCommand ConfigurationFile::GetCommand()
+    {
+        CompileCommand ret;
+        ret.text = compilerName;
+        ret = ret + std::string(extraCompilerDefaults);
+        ret = ret
+        + MacroDefinition{ "NOBPP_COMPILER_NAME", compilerName }
+        + MacroDefinition{ "NOBPP_EXTRA_DEFAULT_COMPILER_ARGS", extraCompilerDefaults }
+        + MacroDefinition{ "NOBPP_EXTRA_DEFAULT_LINKER_ARGS", extraLinkerDefaults }
+        + MacroDefinition{ "NOBPP_UI_MODE", std::to_string((int)uiMode) }
+        + MacroDefinition{ "NOBPP_FILE_DIALOG_MODE", std::to_string((int)fileDialogMode) }
+        + MacroDefinition{ "NOBPP_MINIMUM_LOG_LEVEL", std::to_string((int)minimumLogLevel) }
+        + MacroDefinition{ "NOBPP_SUMMARY_MODE", (IsSummaryMode ? "1" : "0") }
+        + MacroDefinition{ "NOBPP_RECOMPILE_MODE", std::to_string((int)recompileMode) }
+        + MacroDefinition{ "NOBPP_INIT_SCRIPT", initScript };
 
+        LinkCommand linkRet = LinkCommand{} + extraLinkerDefaults;
+
+        #ifdef _WIN32
+        if (fileDialogMode == ConfigurationFile::ConfigFileDialogMode::OSCall)
+        {
+            linkRet = linkRet + StaticLibraryFile{ "ole32.lib" };
+        }
+        #endif  // TODO: implement linux and macos support here
+
+
+        ret = ret + AddLinkCommand{ linkRet };
+    }
+
+    ConfigurationFile GenerateConfigFile()
+    {
+
+    }
 
 
     Init::Init(int argc, char** argv, std::string srcName)
@@ -1169,7 +1306,7 @@ namespace nob
 
     Init::~Init()
     {
-        std::filesystem::remove(std::filesystem::current_path() / "nob_error_log.txt");
+        // std::filesystem::remove(std::filesystem::temp_directory_path() / "nob_error_log.txt");
     }
 
     void Log(std::string s, LogType t)
