@@ -197,15 +197,7 @@ namespace nob
     struct ConfigurationFile
     {
         std::filesystem::path file;
-        std::string compilerName =
-        #if defined(__nob_msvc__)
-            "cl"
-        #elif defined(__nob_clang__)
-            "clang++"
-        #elif defined(__nob_gcc__)
-            "g++"
-        #endif
-        ;
+        std::string compilerName = "";
 
         std::string extraCompilerDefaults = "";
         std::string extraLinkerDefaults = "";
@@ -216,7 +208,7 @@ namespace nob
         enum class ConfigRecompileMode { Always, Ask, Never } recompileMode = ConfigurationFile::ConfigRecompileMode::Always;
         std::string initScript = "";
 
-        CompileCommand GetCommand();
+        CompileCommand GetCommand(SourceFile sf, ExecutableFile ef);
         static ConfigurationFile GetDefaultConfig();
     };
 
@@ -356,7 +348,7 @@ namespace nob
         }
 
         Log("Done\n", LogType::Run);
-        
+
         return ret;
     }
 
@@ -827,7 +819,7 @@ namespace nob
                 if (a.text[i] == ' ' and a.text[i + 1] != ' ' and a.text[i + 1] != '-')
                 {  // an argument with no - prefix is a source file
                     std::filesystem::path file;
-                    
+
                     if (a.text[i + 1] == '"')
                     {
                         file = a.text.substr(i + 2, a.text.substr(i + 2).find('"'));
@@ -1022,6 +1014,7 @@ namespace nob
     {
         for (int i = 1; i < argc; i++)
         {
+            if (std::string(argv[i]) == "-configure") continue;
             cmd = cmd + ("\"" + std::string(argv[i]) + "\"");
         }
         return cmd;
@@ -1042,6 +1035,10 @@ namespace nob
             {
                 CLFlags.set(CLArgument::NoInitScript);
             }
+            else if (std::string(argv[i]) == "-configure")
+            {
+                CLFlags.set(CLArgument::Configure);
+            }
             else if (std::string(argv[i]) == "-debug")
             {
                 CLFlags.set(CLArgument::Debug);
@@ -1054,7 +1051,7 @@ namespace nob
             {
                 CLFlags.set(CLArgument::Clean);
             }
-            else 
+            else
             {
                 OtherCLArguments.push_back(argv[i]);
             }
@@ -1077,7 +1074,7 @@ namespace nob
             (LogType)NOBPP_MINIMUM_LOG_LEVEL,
             NOBPP_SUMMARY_MODE == 1,
             (ConfigurationFile::ConfigRecompileMode)NOBPP_RECOMPILE_MODE,
-            NOBPP_INIT_SCRIPT            
+            NOBPP_INIT_SCRIPT
         };
     }
 
@@ -1138,7 +1135,7 @@ namespace nob
         config.recompileMode = (ConfigurationFile::ConfigRecompileMode)std::stoi(temp);
         if (!std::getline(configFile, temp)) return config;
         config.initScript = temp;
-        
+
         return config;
     }
 
@@ -1195,11 +1192,12 @@ namespace nob
         return ret;
     }
 
-    CompileCommand ConfigurationFile::GetCommand()
+    CompileCommand ConfigurationFile::GetCommand(SourceFile sf, ExecutableFile ef)
     {
         CompileCommand ret;
         ret.text = compilerName;
         ret = ret + std::string(extraCompilerDefaults);
+        ret = ret + sf;
         ret = ret
         + MacroDefinition{ "NOBPP_COMPILER_NAME", compilerName }
         + MacroDefinition{ "NOBPP_EXTRA_DEFAULT_COMPILER_ARGS", extraCompilerDefaults }
@@ -1211,7 +1209,7 @@ namespace nob
         + MacroDefinition{ "NOBPP_RECOMPILE_MODE", std::to_string((int)recompileMode) }
         + MacroDefinition{ "NOBPP_INIT_SCRIPT", initScript };
 
-        LinkCommand linkRet = LinkCommand{} + extraLinkerDefaults;
+        LinkCommand linkRet = LinkCommand{} + extraLinkerDefaults + ef;
 
         #ifdef _WIN32
         if (fileDialogMode == ConfigurationFile::ConfigFileDialogMode::OSCall)
@@ -1222,13 +1220,199 @@ namespace nob
 
 
         ret = ret + AddLinkCommand{ linkRet };
+        return ret;
     }
 
     ConfigurationFile GenerateConfigFile()
     {
+        ConfigurationFile ret;
+        int out;
+        for (int i = 0; i < 5; i++)
+        {
+            switch (i)
+            {
+            case 0:
+                out = AskMultipleChoiceQuestion("Do you want to create a configuration, or load one?",
+                    "The first time a build.cpp file is compiled, it is in an UNCONFIGURED state. When the resulting executable is run, it searches for a .nobppconfig. In this case, one was not found. This executable will then recompile itself, with macros based on the chosen configuration. If you already have a .nobppconfig file in another directory, you can enter its path here.", { "Create", "Load" }, 0);
+                if (out == 1)
+                {
+                    std::filesystem::path path = AskShortAnswerQuestion("Enter .nobppconfig path.");
+                    if (std::filesystem::is_regular_file(path))
+                    {
+                        return LoadConfigFile(path);
+                    }
+                    else if (std::filesystem::is_directory(path))
+                    {
+                        for (auto& p : std::filesystem::directory_iterator(path))
+                        {
+                            if (std::filesystem::is_regular_file(p.path()) && p.path().filename() == ".nobppconfig")
+                            {
+                                return LoadConfigFile(p.path());
+                            }
+                        }
+                    }
 
+                    std::cout << "Configuration file not found.\n";
+                    i -= 1;
+                }
+                break;
+            case 1:
+                out = AskMultipleChoiceQuestion("What command invokes the compiler?", "This is the command used to invoke your compiler. The compiler used (clang, gcc and msvc are supported) is detected by the compiler used to compile this executable. If your installation has a custom alias, enter it here.", { "Detected (" + std::string(NOBPP_COMPILER_NAME) + ")", "Other" }, 0);
+                if (out == 0)
+                {
+                    ret.compilerName = NOBPP_COMPILER_NAME;
+                }
+                else if (out == 1)
+                {
+                    ret.compilerName = AskShortAnswerQuestion("Enter compiler command name.");
+                }
+                break;
+            case 2:
+                out = AskMultipleChoiceQuestion("Do you want to change the default compiler arguments?", "This is pretty self-explanatory.", { "Yes", "No" }, 1);
+                if (out == 0)
+                {
+                    ret.extraCompilerDefaults = AskShortAnswerQuestion("Enter the compiler arguments.");
+                }
+                else if (out == 1)
+                {
+                    ret.extraCompilerDefaults = NOBPP_EXTRA_DEFAULT_COMPILER_ARGS;
+                }
+                break;
+            case 3:
+                out = AskMultipleChoiceQuestion("Do you want to change the default linker arguments?", "This is pretty self-explanatory.", { "Yes", "No" }, 1);
+                if (out == 0)
+                {
+                    ret.extraCompilerDefaults = AskShortAnswerQuestion("Enter the linker arguments.");
+                }
+                else if (out == 1)
+                {
+                    ret.extraLinkerDefaults = NOBPP_EXTRA_DEFAULT_LINKER_ARGS;
+                }
+                break;
+            case 4:
+                out = AskMultipleChoiceQuestion("Select the UI mode.", "The basic UI mode is the one you see now, no colour or fancy terminal stuff. It works the same on all platforms. Fancy mode offers a more fancy experience, but requires an OS-specific implementation, so it is not guaranteed to work on every platform.", { "Basic", "Fancy" }, 0);
+                if (out == 0)
+                {
+                    ret.uiMode = ConfigurationFile::ConfigUIMode::Basic;
+                }
+                else if (out == 1)
+                {
+                    ret.uiMode = ConfigurationFile::ConfigUIMode::Fancy;
+                }
+                break;
+            case 5:
+                if (ret.uiMode == ConfigurationFile::ConfigUIMode::Fancy)
+                {
+                    out = AskMultipleChoiceQuestion("Select the file dialog mode.", "When (if ever) nobpp needs you to provide a file path, this setting dictates the way that you input it. Basic simply prompts you to type the path, while Fancy enables an in-terminal file picker dialog. OS-Specific calls your operating system's file picker, but is not guaranteed to work on every platform.", { "Basic", "Fancy", "OS-Specific" }, 0);
+                    if (out >= 0) ret.fileDialogMode = (ConfigurationFile::ConfigFileDialogMode)out;
+                }
+                else
+                {
+                    out = AskMultipleChoiceQuestion("Select the file dialog mode.", "When (if ever) nobpp needs you to provide a file path, this setting dictates the way that you input it. Basic simply prompts you to type the path, while Fancy enables an in-terminal file picker dialog. OS-Specific calls your operating system's file picker, but is not guaranteed to work on every platform.", { "Basic", "OS-Specific" }, 0);
+                    if (out >= 0) ret.fileDialogMode = (ConfigurationFile::ConfigFileDialogMode)(2*out);
+                }
+                break;
+            case 6:
+                out = AskMultipleChoiceQuestion("Select the minimum log level.", "This option silences all logs below the selected level.", { "Trace", "Info", "Error", "None" }, 0);
+                if (out >= 0) ret.minimumLogLevel = (LogType)(out == 3 ? -1 : out);
+                break;
+            case 7:
+                out = AskMultipleChoiceQuestion("Use summary mode?", "Summary mode replaces all command logs with concise descriptions." + std::string(ret.uiMode == ConfigurationFile::ConfigUIMode::Fancy ? " Since you are in Fancy mode, you can still see the full commands by selecting them." : ""), { "Yes", "No" }, 1);
+                if (out == 0)
+                {
+                    ret.IsSummaryMode = true;
+                }
+                else if (out == 1)
+                {
+                    ret.IsSummaryMode = false;
+                }
+                break;
+            case 8:
+                out = AskMultipleChoiceQuestion("When this build script is updated, should it be recompiled?", "When the build executable runs, it compares itself to its source file. If the source file has been modified more recently, it can recompile itself. If Always is selected, this is done automatically. If Ask is selected, the program will ask before it rebuilds. If Never is selected, it will not rebuild. Note that this functionality is only available when the source file is in the same directory as this executable.", { "Always", "Ask", "Never" }, 2);
+                if (out >= 0) ret.recompileMode = (ConfigurationFile::ConfigRecompileMode)out;
+                break;
+            case 9:
+                out = AskMultipleChoiceQuestion("Do you want to add an init-script?", "You might want to run an additional program whenever this build is invoked. For example, if you are using MSVC, you will need to run vcvars64.bat if you want to compile outside of the Developer Powershell. You can add the path to that here.", { "Yes", "No" }, 1);
+                if (out == 0)
+                {
+                    ret.initScript = AskShortAnswerQuestion("Enter the script name.");
+                }
+                if (out == 1)
+                {
+                    ret.initScript = "";
+                }
+                break;
+            case 10:
+                out = AskMultipleChoiceQuestion("Configuration complete! What do you want to do with it?", "You can still edit it by typing 'back'.", { "Save and Run", "Just Run", "Just Save" }, 0);
+                if (out == 0 || out == 2)
+                {
+            #ifdef _WIN32
+                    std::string homeName = "%LOCALAPPDATA%";
+                    const char* appdata = std::getenv("LOCALAPPDATA");
+                    std::filesystem::path homePath = appdata == nullptr ? std::filesystem::path{} : std::filesystem::path{ appdata };
+            #else
+                    std::string homeName = "$HOME";
+                    const char* appdata = std::getenv("HOME");
+                    std::filesystem::path homePath = appdata == nullptr ? std::filesystem::path{} : std::filesystem::path{ appdata };
+            #endif
+                    int loc;
+                    if (appdata == nullptr)
+                    {
+                        int loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to this directory, it will not be automatically accessible if you (for some reason) need to manually rebuild this executable.", { "This Directory", "Custom" }, 0);
+                    }
+                    else
+                    {
+                        int loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to " + homeName + ", it will not be accessible by every nobpp build script on your system. Each build script can also access a configuration placed in its directory.", { "This Directory", homeName, "Custom" }, 0);
+                    }
+                    if (loc == 0)
+                    {
+                        SaveConfigFile(ThisExecutablePath.parent_path() / ".nobppconfig", ret);
+                    }
+                    else if (appdata != nullptr && loc == 1)
+                    {
+                        SaveConfigFile(homePath / ".nobppconfig", ret);
+                    }
+                    else if (loc > 0)
+                    {
+                        std::filesystem::path customDir = { AskShortAnswerQuestion("Enter the path of the directory where this configuration should be saved.") };
+                        if (std::filesystem::is_directory(customDir))
+                        {
+                            SaveConfigFile(customDir / ".nobppconfig", ret);
+                        }
+                        else
+                        {
+                            out = -1;
+                            i += 1;
+                        }
+                    }
+                    else
+                    {
+                        out = -1;
+                        i += 1;
+                    }
+                }
+
+                if (out == 0 || out == 2) std::cout << "Configuration saved.\n";
+
+                if (out == 2)
+                {
+                    std::exit(0);
+                }
+            default: break;
+            }
+            if (out == -1) i -= 2;
+        }
+        return ret;
     }
 
+    void RenameCarefully(std::filesystem::path file, std::filesystem::path name)
+    {
+        if (std::filesystem::is_regular_file(file.parent_path() / name))
+        {
+            RenameCarefully(file.parent_path() / name, { name.stem().string() + ".old" + name.extension().string() });
+        }
+        std::filesystem::rename(file, file.replace_filename(name));
+    }
 
     Init::Init(int argc, char** argv, std::string srcName)
     {
@@ -1244,8 +1428,59 @@ namespace nob
         ConsumeFlags(argc, argv);
 
         // get relevant files
-        std::filesystem::path binPath = { argv[0] };
-        std::filesystem::path srcPath = binPath.parent_path() / srcName;
+        std::filesystem::path srcPath = ThisExecutablePath.parent_path() / srcName;
+        if (!std::filesystem::is_regular_file(srcPath))
+        {
+            std::cout << "Source file not found. If you want " << srcName << " to be automatically recompiled when changed, it should be placed in the same folder as this executable.\n";
+        }
+
+        if (!std::filesystem::is_regular_file(ThisExecutablePath))
+        {
+            std::cout << "Executable file not found (for some reason). This may cause issues.\n";
+        }
+        else if (ThisExecutablePath.filename().string() != (srcPath.stem().string()  // if new, rename
+      #ifdef _WIN32
+            + ".exe"
+      #endif
+        ))
+        {
+            RenameCarefully(ThisExecutablePath, { srcPath.stem().string()
+      #ifdef _WIN32
+            + ".exe"
+      #endif
+            });
+        }
+        else  // otherwise delete old files
+        {
+            std::string stem = ThisExecutablePath.stem().string() + ".old";
+            while (std::filesystem::is_regular_file(ThisExecutablePath.parent_path() / (stem + ThisExecutablePath.extension().string())))
+            {
+                std::filesystem::remove(ThisExecutablePath.parent_path() / (stem + ThisExecutablePath.extension().string()));
+                stem += ".old";
+            }
+        }
+
+
+      #ifdef NOBPP_CONFIGURED
+
+      #else
+        ConfigurationFile config;
+        std::filesystem::path configPath;
+        if (!CLFlags[CLArgument::Configure] && FindConfigFile(configPath))
+        {
+            std::cout << "Configuration found. Rerun with -configure to create a new configuration.\n";
+            config = LoadConfigFile(configPath);
+        }
+        else
+        {
+            if (!CLFlags[CLArgument::Configure]) std::cout << "No configuration found.\n";
+            config = GenerateConfigFile();
+        }
+        std::cout << "Rebuilding with configuration.\n";
+        std::filesystem::path newExec = ThisExecutablePath.parent_path() / (ThisExecutablePath.stem().string() + ".new" + ThisExecutablePath.extension().string());
+        config.GetCommand(SourceFile{ srcPath }, ExecutableFile{ newExec }).Run();
+        Command newBinCmd;  // TODO: continue work here
+      #endif
 
 #ifdef NOBPP_INIT_SCRIPT
         if (!CLFlags[CLArgument::NoInitScript])  // init script can be run
@@ -1272,7 +1507,7 @@ namespace nob
             if (std::filesystem::last_write_time(binPath) < std::filesystem::last_write_time(srcPath))
             {
                 Log("Source change detected, rebuilding...\n", LogType::Info);
-                
+
                 // rename to <binary>.old
                 std::filesystem::rename(binPath, oldBinPath);
 
