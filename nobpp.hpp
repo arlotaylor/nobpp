@@ -1461,7 +1461,22 @@ namespace nob
         }
 
 
+      #define NOBPP_CONFIGURED
       #ifdef NOBPP_CONFIGURED
+        bool shouldInitScript = false;
+        bool shouldRebuild = false;
+        if (NOBPP_INIT_SCRIPT != std::string("") && !CLFlags[CLArgument::NoInitScript]) shouldInitScript = true;
+        if (NOBPP_RECOMPILE_MODE != 2 && !CLFlags[CLArgument::NoRebuild])
+        {
+            if (std::filesystem::last_write_time(ThisExecutablePath) < std::filesystem::last_write_time(srcPath))
+            {
+                int out = AskMultipleChoiceQuestion("Newer source file detected. Do you want to rebuild?", "This executable is configured to ask each time the program wants to rebuild.
+                if (out == 0)
+                {
+                     // TODO: keep going
+                }
+            }
+        }
 
       #else
         ConfigurationFile config;
@@ -1478,8 +1493,13 @@ namespace nob
         }
         std::cout << "Rebuilding with configuration.\n";
         std::filesystem::path newExec = ThisExecutablePath.parent_path() / (ThisExecutablePath.stem().string() + ".new" + ThisExecutablePath.extension().string());
-        config.GetCommand(SourceFile{ srcPath }, ExecutableFile{ newExec }).Run();
-        Command newBinCmd;  // TODO: continue work here
+        Command newBinCmd = (config.GetCommand(SourceFile{ srcPath }, ExecutableFile{ newExec })) + (AddArgs(Command() + newExec, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"));
+        if (config.initScript != "")
+        {
+            newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
+        }
+        newBinCmd.Run();
+        std::exit(0);
       #endif
 
 #ifdef NOBPP_INIT_SCRIPT
