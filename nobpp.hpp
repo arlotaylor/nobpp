@@ -107,6 +107,7 @@ namespace nob
 
         template<typename T> MacroDefinition(std::string mcr, T dfn) : macro(mcr), definition(std::to_string(dfn)) {}
         template<> MacroDefinition(std::string mcr, std::string dfn) : macro(mcr), definition(AddEscapes("\"" + dfn + "\"")) {}
+        template<> MacroDefinition(std::string mcr, const char* dfn) : macro(mcr), definition(AddEscapes("\"" + std::string(dfn) + "\"")) {}
     };
 
     struct PrecompiledHeader;
@@ -1435,7 +1436,6 @@ namespace nob
     {
         if (std::filesystem::is_regular_file(file.parent_path() / name))
         {
-            std::cout << "recursing...\n";
             RenameCarefully(file.parent_path() / name, { name.stem().string() + ".old" + name.extension().string() });
         }
         std::filesystem::rename(file, file.parent_path() / name);

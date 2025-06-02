@@ -6,6 +6,7 @@
 int main(int argc, char** argv)
 {
     nob::Init nobInit(argc, argv, __FILE__);
+    nob::CLFlags.set(nob::CLArgument::Clean);
 
     std::cout << "Compiling build file(s).\n";
 
@@ -16,9 +17,6 @@ int main(int argc, char** argv)
         std::filesystem::path file = { str };
         (nob::CompileCommand()
          + nob::SourceFile{ file } + nob::CompilerFlag::CPPVersion17
-#ifdef NOBPP_INIT_SCRIPT
-         + nob::MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
-#endif
          + nob::IncludeDirectory{ std::filesystem::absolute(std::filesystem::path{ argv[0] }).parent_path() }
          + nob::AddLinkCommand{ nob::LinkCommand() }
         ).Run();
