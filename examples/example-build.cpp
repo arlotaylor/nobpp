@@ -1,7 +1,5 @@
 #define NOBPP_IMPLEMENTATION
-#include "nobpp.hpp"
-
-#include <iostream>
+#include "../nobpp.hpp"
 
 int main(int argc, char** argv)
 {

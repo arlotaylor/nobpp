@@ -100,7 +100,14 @@ namespace nob
     struct SourceFile { std::filesystem::path path; };
     struct ObjectFile { std::filesystem::path path; };
     struct IncludeDirectory { std::filesystem::path path; };
-    struct MacroDefinition { std::string macro; std::string definition; };
+    struct MacroDefinition
+    {
+        std::string macro;
+        std::string definition;
+
+        template<typename T> MacroDefinition(std::string mcr, T dfn) : macro(mcr), definition(std::to_string(dfn)) {}
+        template<> MacroDefinition(std::string mcr, std::string dfn) : macro(mcr), definition(AddEscapes("\"" + dfn + "\"")) {}
+    };
 
     struct PrecompiledHeader;
 
@@ -214,7 +221,7 @@ namespace nob
 
     bool FindConfigFile(std::filesystem::path& fileOut);
     ConfigurationFile LoadConfigFile(std::filesystem::path file);
-    void SaveConfigFile(std::filesystem::path file, ConfigurationFile config);
+    void SaveConfigFile(ConfigurationFile config);
 
     int AskMultipleChoiceQuestion(std::string question, std::string info, std::vector<std::string> answers, int defaultVal);
     std::string AskShortAnswerQuestion(std::string question);
@@ -225,7 +232,6 @@ namespace nob
 #endif
 
 
-#define NOBPP_IMPLEMENTATION
 #ifdef NOBPP_IMPLEMENTATION
 // nobpp implementation
 
@@ -235,6 +241,7 @@ namespace nob
 #include <fstream>
 #include <ciso646>
 #include <cstdlib>
+#include <system_error>
 
 // ------------------------------ MACRO DEFINITIONS ----------------------------------
 #if defined(__clang__)
@@ -259,11 +266,11 @@ namespace nob
    || !defined(NOBPP_INIT_SCRIPT)
     #error  // poorly defined configuration
   #else
-    #if (NOBPP_UI_MODE != 0 && NOBPP_UI_MODE != 1) \  // basic, pretty
-     || (NOBPP_MINIMUM_LOG_LEVEL != 0 && NOBPP_MINIMUM_LOG_LEVEL != 1 && NOBPP_MINIMUM_LOG_LEVEL != 2 && NOBPP_MINIMUM_LOG_LEVEL != -1) \  // trace, info, error, none
-     || (NOBPP_SUMMARY_MODE != 0 && NOBPP_SUMMARY_MODE != 1) \  // no, yes
-     || (NOBPP_RECOMPILE_MODE != 0 && NOBPP_RECOMPILE_MODE != 1 && NOBPP_RECOMPILE_MODE != 2) \  // auto, ask, never
-     || (NOBPP_FILE_DIALOG_MODE != 0 && NOBPP_FILE_DIALOG_MODE != 1 && NOBPP_FILE_DIALOG_MODE != 2) \  // command line, pretty command line, os-specific
+    #if (NOBPP_UI_MODE != 0 && NOBPP_UI_MODE != 1) /* basic, pretty */ \
+     || (NOBPP_MINIMUM_LOG_LEVEL != 0 && NOBPP_MINIMUM_LOG_LEVEL != 1 && NOBPP_MINIMUM_LOG_LEVEL != 2 && NOBPP_MINIMUM_LOG_LEVEL != -1) /* trace, info, error, none */ \
+     || (NOBPP_SUMMARY_MODE != 0 && NOBPP_SUMMARY_MODE != 1)  /* no, yes */ \
+     || (NOBPP_RECOMPILE_MODE != 0 && NOBPP_RECOMPILE_MODE != 1 && NOBPP_RECOMPILE_MODE != 2) /* auto, ask, never */ \
+     || (NOBPP_FILE_DIALOG_MODE != 0 && NOBPP_FILE_DIALOG_MODE != 1 && NOBPP_FILE_DIALOG_MODE != 2)  /* command line, pretty command line, os-specific */
       #error  // invalid macros
     #endif
 
@@ -293,8 +300,7 @@ namespace nob
   #define NOBPP_INIT_SCRIPT ""
 #endif
 
-// TODO: change this?
-#if defined(_WIN32) && !defined(NOBPP_CUSTOM_LOG)
+#if (NOBPP_UI_MODE == 1 || NOBPP_FILE_DIALOG_MODE == 2) && defined(_WIN32)
 #define NOMINMAX
 #include <Windows.h>  // for logging :(
 #include <shobjidl.h>  // for file dialog :(
@@ -496,7 +502,7 @@ namespace nob
 
     bool OpenFileDialog(std::filesystem::path& out, std::filesystem::path startingFolder, bool isFolder)
     {
-      #ifdef _WIN32
+      #if NOBPP_FILE_DIALOG_MODE == 2 && defined(_WIN32)
         #define BREAK_ON_FAIL(x) if (FAILED(x)) break
 
         bool ret = false;
@@ -548,13 +554,28 @@ namespace nob
 
         if (fileDialog)
             fileDialog->Release();
-        
+
         return ret;
 
         #undef BREAK_ON_FAIL
       #else
-        Log("not supported sorry\n");
-        return {};
+        // basic file dialog mode
+        while (true)
+        {
+            std::cout << "Enter " << (isFolder ? "directory" : "file") << " path: ";
+            std::string temp; std::getline(std::cin, temp);
+            if (temp == "") return false;
+
+            if (isFolder ? std::filesystem::is_directory({ temp }) : std::filesystem::is_regular_file({ temp }))
+            {
+                out = { temp };
+                return true;
+            }
+            else
+            {
+                std::cout << "Path not valid. Try again.\n";
+            }
+        }
       #endif
     }
 
@@ -707,13 +728,13 @@ namespace nob
     CompileCommand operator+(CompileCommand a, MacroDefinition b)
     {
 #if defined(__nob_msvc__)
-        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
+        return a + ("-D\"" + b.macro + "=" + b.definition + "\"");
 #elif defined(__nob_gcc__)
-        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
+        return a + ("-D\"" + b.macro + "=" + b.definition + "\"");
 #elif defined(__nob_clang__)
-        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
+        return a + ("-D\"" + b.macro + "=" + b.definition + "\"");
 #else
-        return a + ("-D" + b.macro + "=\"" + AddEscapes("\"" + b.definition + "\"") + "\"");
+        return a + ("-D\"" + b.macro + "=" + b.definition + "\"");
 #endif
     }
 
@@ -1093,7 +1114,7 @@ namespace nob
         const char* appdata = std::getenv("LOCALAPPDATA");
         if (appdata == nullptr) return false;
 
-        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{ appdata } / "nobpp"))
+        for (auto& i : std::filesystem::directory_iterator(std::filesystem::path{ appdata }))
       #else
         const char* homepath = std::getenv("HOME");
         if (homepath == nullptr) return false;
@@ -1139,9 +1160,9 @@ namespace nob
         return config;
     }
 
-    void SaveConfigFile(std::filesystem::path file, ConfigurationFile config)
+    void SaveConfigFile(ConfigurationFile config)
     {
-        std::ofstream fileOut(file);
+        std::ofstream fileOut(config.file);
         fileOut << config.compilerName << "\n" << config.extraCompilerDefaults << "\n" << config.extraLinkerDefaults << "\n"
         << (int)config.uiMode << "\n" << (int)config.fileDialogMode << "\n" << (int)config.minimumLogLevel << "\n"
         << (config.IsSummaryMode ? 1 : 0) << "\n" << (int)config.recompileMode << "\n" << config.initScript << "\n";
@@ -1195,18 +1216,20 @@ namespace nob
     CompileCommand ConfigurationFile::GetCommand(SourceFile sf, ExecutableFile ef)
     {
         CompileCommand ret;
-        ret.text = compilerName;
+        ret.text = compilerName + ret.text.substr(ret.text.find(' '));
         ret = ret + std::string(extraCompilerDefaults);
+        ret = ret + CompilerFlag::CPPVersion17;
         ret = ret + sf;
         ret = ret
+        + MacroDefinition{ "NOBPP_CONFIGURED", file.string() }
         + MacroDefinition{ "NOBPP_COMPILER_NAME", compilerName }
         + MacroDefinition{ "NOBPP_EXTRA_DEFAULT_COMPILER_ARGS", extraCompilerDefaults }
         + MacroDefinition{ "NOBPP_EXTRA_DEFAULT_LINKER_ARGS", extraLinkerDefaults }
-        + MacroDefinition{ "NOBPP_UI_MODE", std::to_string((int)uiMode) }
-        + MacroDefinition{ "NOBPP_FILE_DIALOG_MODE", std::to_string((int)fileDialogMode) }
-        + MacroDefinition{ "NOBPP_MINIMUM_LOG_LEVEL", std::to_string((int)minimumLogLevel) }
-        + MacroDefinition{ "NOBPP_SUMMARY_MODE", (IsSummaryMode ? "1" : "0") }
-        + MacroDefinition{ "NOBPP_RECOMPILE_MODE", std::to_string((int)recompileMode) }
+        + MacroDefinition{ "NOBPP_UI_MODE", (int)uiMode }
+        + MacroDefinition{ "NOBPP_FILE_DIALOG_MODE", (int)fileDialogMode }
+        + MacroDefinition{ "NOBPP_MINIMUM_LOG_LEVEL", (int)minimumLogLevel }
+        + MacroDefinition{ "NOBPP_SUMMARY_MODE", IsSummaryMode ? 1 : 0 }
+        + MacroDefinition{ "NOBPP_RECOMPILE_MODE", (int)recompileMode }
         + MacroDefinition{ "NOBPP_INIT_SCRIPT", initScript };
 
         LinkCommand linkRet = LinkCommand{} + extraLinkerDefaults + ef;
@@ -1227,7 +1250,7 @@ namespace nob
     {
         ConfigurationFile ret;
         int out;
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 11; i++)
         {
             switch (i)
             {
@@ -1355,7 +1378,7 @@ namespace nob
                     const char* appdata = std::getenv("HOME");
                     std::filesystem::path homePath = appdata == nullptr ? std::filesystem::path{} : std::filesystem::path{ appdata };
             #endif
-                    int loc;
+                    int loc = 0;
                     if (appdata == nullptr)
                     {
                         int loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to this directory, it will not be automatically accessible if you (for some reason) need to manually rebuild this executable.", { "This Directory", "Custom" }, 0);
@@ -1366,18 +1389,21 @@ namespace nob
                     }
                     if (loc == 0)
                     {
-                        SaveConfigFile(ThisExecutablePath.parent_path() / ".nobppconfig", ret);
+                        ret.file = ThisExecutablePath.parent_path() / ".nobppconfig";
+                        SaveConfigFile(ret);
                     }
                     else if (appdata != nullptr && loc == 1)
                     {
-                        SaveConfigFile(homePath / ".nobppconfig", ret);
+                        ret.file = homePath / ".nobppconfig";
+                        SaveConfigFile(ret);
                     }
                     else if (loc > 0)
                     {
                         std::filesystem::path customDir = { AskShortAnswerQuestion("Enter the path of the directory where this configuration should be saved.") };
                         if (std::filesystem::is_directory(customDir))
                         {
-                            SaveConfigFile(customDir / ".nobppconfig", ret);
+                            ret.file = customDir / ".nobppconfig";
+                            SaveConfigFile(ret);
                         }
                         else
                         {
@@ -1409,9 +1435,10 @@ namespace nob
     {
         if (std::filesystem::is_regular_file(file.parent_path() / name))
         {
+            std::cout << "recursing...\n";
             RenameCarefully(file.parent_path() / name, { name.stem().string() + ".old" + name.extension().string() });
         }
-        std::filesystem::rename(file, file.replace_filename(name));
+        std::filesystem::rename(file, file.parent_path() / name);
     }
 
     Init::Init(int argc, char** argv, std::string srcName)
@@ -1460,9 +1487,21 @@ namespace nob
             }
         }
 
-
-      #define NOBPP_CONFIGURED
       #ifdef NOBPP_CONFIGURED
+        if (CLFlags[CLArgument::Configure])
+        {
+            ConfigurationFile config = GenerateConfigFile();
+            std::cout << "Rebuilding with configuration.\n";
+            std::filesystem::path newExec = ThisExecutablePath.parent_path() / (ThisExecutablePath.stem().string() + ".new" + ThisExecutablePath.extension().string());
+            Command newBinCmd = (config.GetCommand(SourceFile{ srcPath }, ExecutableFile{ newExec })) + (AddArgs(Command() + newExec, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"));
+            if (!CLFlags[CLArgument::NoInitScript] && config.initScript != "")
+            {
+                newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
+            }
+            newBinCmd.Run();
+            std::exit(0);
+        }
+
         bool shouldInitScript = false;
         bool shouldRebuild = false;
         if (NOBPP_INIT_SCRIPT != std::string("") && !CLFlags[CLArgument::NoInitScript]) shouldInitScript = true;
@@ -1470,13 +1509,40 @@ namespace nob
         {
             if (std::filesystem::last_write_time(ThisExecutablePath) < std::filesystem::last_write_time(srcPath))
             {
-                int out = AskMultipleChoiceQuestion("Newer source file detected. Do you want to rebuild?", "This executable is configured to ask each time the program wants to rebuild.
-                if (out == 0)
+                if (NOBPP_RECOMPILE_MODE == 0)
                 {
-                     // TODO: keep going
+                    shouldRebuild = true;
+                }
+                else
+                {
+                    int out = AskMultipleChoiceQuestion("Newer source file detected. Do you want to rebuild?", "This executable is configured to ask each time the program wants to auto-rebuild.", { "Yes", "No" }, 0);
+                    if (out == 0)
+                    {
+                        shouldRebuild = true;
+                    }
                 }
             }
         }
+
+        if (shouldRebuild)
+        {
+            ConfigurationFile config = ConfigurationFile::GetDefaultConfig();
+            std::cout << "Rebuilding.\n";
+            std::filesystem::path newExec = ThisExecutablePath.parent_path() / (ThisExecutablePath.stem().string() + ".new" + ThisExecutablePath.extension().string());
+            Command newBinCmd = (config.GetCommand(SourceFile{ srcPath }, ExecutableFile{ newExec })) + (AddArgs(Command() + newExec, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"));
+            if (shouldInitScript)
+            {
+                newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
+            }
+            newBinCmd.Run();
+            std::exit(0);
+        }
+        else if (shouldInitScript)
+        {
+            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + (AddArgs(Command() + ThisExecutablePath, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"))).Run();
+            std::exit(0);
+        }
+
 
       #else
         ConfigurationFile config;
@@ -1502,56 +1568,6 @@ namespace nob
         std::exit(0);
       #endif
 
-#ifdef NOBPP_INIT_SCRIPT
-        if (!CLFlags[CLArgument::NoInitScript])  // init script can be run
-        {
-            Command newBinCmd;
-            newBinCmd = newBinCmd + binPath + std::string("-noinitscript");
-            newBinCmd = AddArgs(newBinCmd, argc, argv);
-            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + newBinCmd).Run(false, true);
-            std::exit(0);
-        }
-#endif
-
-        if (!CLFlags[CLArgument::NoRebuild] and std::filesystem::exists(srcPath))  // rebuild can be checked
-        {
-            // delete <binary>.old
-            std::filesystem::path oldBinPath = binPath.parent_path() / (binPath.filename().string() + ".old");
-            if (std::filesystem::exists(oldBinPath))
-            {
-                Log("Deleting " + oldBinPath.filename().string() + "...\n", LogType::Info);
-                std::filesystem::remove(oldBinPath);
-            }
-
-            // rebuild if source is younger than binary
-            if (std::filesystem::last_write_time(binPath) < std::filesystem::last_write_time(srcPath))
-            {
-                Log("Source change detected, rebuilding...\n", LogType::Info);
-
-                // rename to <binary>.old
-                std::filesystem::rename(binPath, oldBinPath);
-
-                // compile and run the new binary
-                (CompileCommand() + SourceFile{ srcPath } + CompilerFlag::CPPVersion17
-#ifdef NOBPP_INIT_SCRIPT
-                + MacroDefinition{ "NOBPP_INIT_SCRIPT", NOBPP_INIT_SCRIPT }
-#endif
-                + AddLinkCommand{LinkCommand()
-#ifdef _WIN32
-                    + StaticLibraryFile{ "ole32.lib" }
-#endif
-                    
-                    + ExecutableFile{binPath}}).Run();
-
-                Command newBinCmd;
-                newBinCmd = newBinCmd + binPath + std::string("-norebuild");
-                newBinCmd = AddArgs(newBinCmd, argc, argv);
-                newBinCmd.Run(false, true);
-                std::exit(0);
-            }
-        }
-
-
         if (CLFlags[CLArgument::Debug])
         {
             DefaultCompileCommand = DefaultCompileCommand + CompilerFlag::Debug;
@@ -1572,7 +1588,7 @@ namespace nob
         NOBPP_CUSTOM_LOG((prefix + s));
 #else
 
-#ifdef _WIN32
+#if NOBPP_UI_MODE == 1 && defined(_WIN32)
         HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
 
         int consoleCode = 15;
@@ -1588,7 +1604,7 @@ namespace nob
         SetConsoleTextAttribute(console, consoleCode);
         std::cout << prefix + s;
         SetConsoleTextAttribute(console, 15);
-#else
+#elif NOBPP_UI_MODE == 1
         std::string consoleCode = "0";
         switch (t)
         {
@@ -1600,15 +1616,12 @@ namespace nob
         }
 
         std::cout << "\033[" + consoleCode + "m" << prefix + s << "\033[0m";
+#else
+        std::cout << prefix + s;
 #endif
 
 #endif
     }
 }
-
-#ifdef NOBPP_WINDOWS_WAS_STRIPPED
-#define _WIN32
-#undef NOBPP_WINDOWS_WAS_STRIPPED
-#endif
 
 #endif

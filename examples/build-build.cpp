@@ -1,5 +1,5 @@
 #define NOBPP_IMPLEMENTATION
-#include "nobpp.hpp"
+#include "../nobpp.hpp"
 
 #include <iostream>
 

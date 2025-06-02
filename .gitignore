@@ -9,4 +9,4 @@
 *.sln
 .vs/
 compile_flags.txt
-
+.nobppconfig
