@@ -7,7 +7,7 @@ int main(int argc, char** argv)
 
     nob::Log("Compiling " + (std::filesystem::current_path() / "src").string() + "\n", nob::LogType::Info);
 
-    if (std::filesystem::remove_all(std::filesystem::current_path() / "bin"))
+    if (nob::CLFlags[nob::CLArgument::Clean] && std::filesystem::remove_all(std::filesystem::current_path() / "bin"))
     {
         nob::Log("Pre-existing binaries deleted.\n", nob::LogType::Info);
     }

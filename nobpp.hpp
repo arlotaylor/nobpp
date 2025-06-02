@@ -1453,6 +1453,8 @@ namespace nob
         CLFlags.reset();
         OtherCLArguments.clear();
         ConsumeFlags(argc, argv);
+        bool isActuallyClean = CLFlags[CLArgument::Clean];
+        CLFlags.set(CLArgument::Clean);
 
         // get relevant files
         std::filesystem::path srcPath = ThisExecutablePath.parent_path() / srcName;
@@ -1498,7 +1500,7 @@ namespace nob
             {
                 newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
             }
-            newBinCmd.Run();
+            newBinCmd.Run(false, true);
             std::exit(0);
         }
 
@@ -1534,12 +1536,12 @@ namespace nob
             {
                 newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
             }
-            newBinCmd.Run();
+            newBinCmd.Run(false, true);
             std::exit(0);
         }
         else if (shouldInitScript)
         {
-            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + (AddArgs(Command() + ThisExecutablePath, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"))).Run();
+            ((Command() + std::filesystem::path{ NOBPP_INIT_SCRIPT }) + (AddArgs(Command() + ThisExecutablePath, argc, argv) + std::string("-noinitscript") + std::string("-norebuild"))).Run(false, true);
             std::exit(0);
         }
 
@@ -1564,9 +1566,11 @@ namespace nob
         {
             newBinCmd = (Command() + std::filesystem::path{ config.initScript }) + newBinCmd;
         }
-        newBinCmd.Run();
+        newBinCmd.Run(false, true);
         std::exit(0);
       #endif
+
+        CLFlags.set(CLArgument::Clean, isActuallyClean);
 
         if (CLFlags[CLArgument::Debug])
         {
