@@ -57,8 +57,8 @@ namespace nob
         std::string text;
         std::filesystem::path path = std::filesystem::current_path();
 
-        float latestInput = 1.f;
-        float earliestOutput = FLT_MAX;
+        double latestInput = 1.0;
+        double earliestOutput = DBL_MAX;
 
         int Run(bool suppressOutput = false, bool plainErrors = false);
         void UpdateInputTime(std::filesystem::path file, bool skipOnFail = false);
@@ -320,6 +320,8 @@ namespace nob
             return 0;
         }
 
+        Log("Times: " + std::to_string(latestInput) + "," + std::to_string(earliestOutput), LogType::Run);
+
         if (CLFlags[CLArgument::Silent])
         {
             suppressOutput = true;
@@ -363,7 +365,7 @@ namespace nob
     {
         if (std::filesystem::exists(file))
         {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(file).time_since_epoch()).count();
+            double modified = std::chrono::duration<double>(std::filesystem::last_write_time(file).time_since_epoch()).count();
             latestInput = std::max(latestInput, modified);
         }
         else if (!skipOnFail)
@@ -376,12 +378,12 @@ namespace nob
     {
         if (std::filesystem::exists(file))
         {
-            float modified = std::chrono::duration<float>(std::filesystem::last_write_time(file).time_since_epoch()).count();
+            double modified = std::chrono::duration<double>(std::filesystem::last_write_time(file).time_since_epoch()).count();
             earliestOutput = std::min(earliestOutput, modified);
         }
         else if (!skipOnFail)
         {
-            earliestOutput = 0.f;
+            earliestOutput = 0.0;
         }
     }
 
