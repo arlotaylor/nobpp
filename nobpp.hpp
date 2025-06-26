@@ -1049,6 +1049,11 @@ namespace nob
     void ConsumeFlags(int argc, char** argv)
     {
         ThisExecutablePath = std::filesystem::path{ argv[0] };
+        if (ThisExecutablePath.is_relative())
+        {
+            ThisExecutablePath = std::filesystem::current_path() / ThisExecutablePath;
+        }
+
         for (int i = 1; i < argc; i++)
         {
             if (std::string(argv[i]) == "-norebuild")
@@ -1384,11 +1389,11 @@ namespace nob
                     int loc = 0;
                     if (appdata == nullptr)
                     {
-                        int loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to this directory, it will not be automatically accessible if you (for some reason) need to manually rebuild this executable.", { "This Directory", "Custom" }, 0);
+                        loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to this directory, it will not be automatically accessible if you (for some reason) need to manually rebuild this executable.", { "This Directory", "Custom" }, 0);
                     }
                     else
                     {
-                        int loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to " + homeName + ", it will not be accessible by every nobpp build script on your system. Each build script can also access a configuration placed in its directory.", { "This Directory", homeName, "Custom" }, 0);
+                        loc = AskMultipleChoiceQuestion("Where should this configuration be saved?", "If you do not save this configuration to " + homeName + ", it will not be accessible by every nobpp build script on your system. Each build script can also access a configuration placed in its directory.", { "This Directory", homeName, "Custom" }, 0);
                     }
                     if (loc == 0)
                     {
